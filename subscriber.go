@@ -15,6 +15,7 @@ import (
 	"github.com/oxtoacart/bpool"
 	"github.com/pquerna/ffjson/ffjson"
 	"github.com/relistan/envconfig"
+	"gopkg.in/relistan/rubberneck.v1"
 )
 
 const (
@@ -106,6 +107,12 @@ func (f *LogFollower) SendBatch() {
 			continue
 		}
 
+		if startRec + len(buf) > len(data) {
+			log.Warnf("Batch buffer size exceeded!")
+			f.send(data[:startRec])
+			return
+		}
+
 		copy(data[startRec:], buf)
 		startRec += len(buf) // TODO validate that this does the right thing!
 		data[startRec] = '\n'
@@ -115,8 +122,12 @@ func (f *LogFollower) SendBatch() {
 		defer ffjson.Pool(buf)
 	}
 
+	f.send(data[:startRec])
+}
+
+func (f *LogFollower) send(buf []byte) {
 	// TODO send these with HTTP or something
-	ioutil.WriteFile("out.json", data[:startRec], 0644)
+	ioutil.WriteFile("out.json", buf, 0644)
 }
 
 // BatchRecord adds a record to the batch channel after Unmarshaling it from
@@ -207,6 +218,8 @@ func main() {
 
 	var follower LogFollower
 	envconfig.Process("sub", &follower)
+	rubberneck.Print(follower)
+
 	follower.batchedRecords = make(chan *message.Message, BatchSize)
 	follower.outPool = bpool.NewBytePool(2, OutRecordSize)
 	follower.quitChan = make(chan struct{})
