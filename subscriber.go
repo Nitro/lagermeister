@@ -2,20 +2,26 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/signal"
 	"time"
 
+	"github.com/Nitro/lagermeister/message"
 	log "github.com/Sirupsen/logrus"
+	"github.com/gogo/protobuf/proto"
 	"github.com/nats-io/go-nats-streaming"
 	"github.com/nats-io/go-nats-streaming/pb"
+	"github.com/oxtoacart/bpool"
+	"github.com/pquerna/ffjson/ffjson"
 	"github.com/relistan/envconfig"
-	"github.com/Nitro/lagermeister/message"
-	"github.com/gogo/protobuf/proto"
 )
 
 const (
-	BatchSize = 25
+	BatchSize      = 25
+	MaxEncodedSize = 21 * 1024 // Maximum encoded JSON size
+	OutRecordSize  = BatchSize*MaxEncodedSize + BatchSize + 10
+	CheckTime      = 5 * time.Second // Check the NATS connection
 )
 
 func printMsg(m *stan.Msg, i int) {
@@ -35,17 +41,20 @@ type LogFollower struct {
 	NatsUrl     string `envconfig:"NATS_URL" default:"nats://localhost:4222"`
 	Subject     string `envconfig:"SUBJECT"`
 
-	stanConn     stan.Conn
-	subscription stan.Subscription
+	stanConn       stan.Conn
+	subscription   stan.Subscription
 	batchedRecords chan *message.Message
-	lastSent    time.Time
-	pool        *bpool.BufferPool
+	lastSent       time.Time
+	outPool        *bpool.BytePool
+	quitChan       chan struct{}
+	startOpt       stan.SubscriptionOption
 }
 
 func NewLogFollower() *LogFollower {
 	return &LogFollower{
 		batchedRecords: make(chan *message.Message, BatchSize),
-		pool:
+		outPool:        bpool.NewBytePool(2, OutRecordSize),
+		quitChan:       make(chan struct{}),
 	}
 }
 
@@ -54,23 +63,60 @@ func (f *LogFollower) Connect() error {
 
 	f.stanConn, err = stan.Connect(f.ClusterId, f.ClientId, stan.NatsURL(f.NatsUrl))
 	if err != nil {
-		return fmt.Errorf("Can't connect: %v.\nMake sure a NATS Streaming Server is running at: %s", err, f.NatsUrl)
+		return fmt.Errorf(
+			"Can't connect: %v.\nMake sure a NATS Streaming Server is running at: %s",
+			err, f.NatsUrl,
+		)
 	}
-	log.Printf("Connected to %s clusterID: [%s] clientID: [%s]\n", f.NatsUrl, f.ClusterId, f.ClientId)
+	log.Printf("Connected to %s clusterID: [%s] clientID: [%s]\n",
+		f.NatsUrl, f.ClusterId, f.ClientId,
+	)
 
 	return nil
+}
+
+// manageConnection keeps the stan/NATS connection alive
+func (f *LogFollower) manageConnection() {
+	for {
+		select {
+		case <-time.After(5 * time.Second):
+			if f.stanConn == nil || !f.stanConn.NatsConn().IsConnected() {
+				log.Warn("Disconnected... reconnecting")
+				f.Connect()
+				f.subscribe()
+			}
+		case <-f.quitChan:
+			return
+		}
+	}
 }
 
 // SendBatch takes what's currently in the batchedRecords channel and sends
 // it to the remote service.
 func (f *LogFollower) SendBatch() {
-	data := make([]*message.Message, BatchSize)
+	var startRec int
+
+	data := f.outPool.Get()
+	defer f.outPool.Put(data)
 
 	for i := 0; i < BatchSize; i++ {
-		data[i] = <-f.batchedRecords
+		buf, err := ffjson.Marshal(<-f.batchedRecords)
+		if err != nil {
+			log.Errorf("Error encoding record: %s", err)
+			continue
+		}
+
+		copy(data[startRec:], buf)
+		startRec += len(buf) // TODO validate that this does the right thing!
+		data[startRec] = '\n'
+		startRec += 1
+
+		// Kinda dangerous to do this in a for loop, let's see how it goes
+		defer ffjson.Pool(buf)
 	}
 
-	log.Warnf("Batched %d records", len(data))
+	// TODO send these with HTTP or something
+	ioutil.WriteFile("out.json", data[:startRec], 0644)
 }
 
 // BatchRecord adds a record to the batch channel after Unmarshaling it from
@@ -84,34 +130,18 @@ func (f *LogFollower) BatchRecord(msg *stan.Msg) {
 	}
 
 	select {
-	case f.batchedRecords <-&record: // do nothing
+	case f.batchedRecords <- &record: // do nothing
 	default:
 		go f.SendBatch()
 		log.Debug("Sending batch, waiting to batch new record")
-		f.batchedRecords <-&record
+		f.batchedRecords <- &record
 	}
 }
 
-// Follow begins following the Subject in the NATS streaming host
-func (f *LogFollower) Follow() error {
-	startOpt := stan.StartAt(pb.StartPosition_NewOnly)
-
-	if f.StartSeq != 0 {
-		startOpt = stan.StartAtSequence(f.StartSeq)
-	} else if f.DeliverLast == true {
-		startOpt = stan.StartWithLastReceived()
-	} else if f.DeliverAll == true {
-		log.Print("subscribing with DeliverAllAvailable")
-		startOpt = stan.DeliverAllAvailable()
-	} else if f.StartDelta != "" {
-		ago, err := time.ParseDuration(f.StartDelta)
-		if err != nil {
-			f.stanConn.Close()
-			log.Fatal(err)
-		}
-		startOpt = stan.StartAtTimeDelta(ago)
+func (f *LogFollower) subscribe() error {
+	if f.stanConn == nil {
+		return fmt.Errorf("Can't subscribe, stan connection was nil!")
 	}
-
 	var i int
 	mcb := func(msg *stan.Msg) {
 		i++
@@ -121,12 +151,42 @@ func (f *LogFollower) Follow() error {
 
 	var err error
 	f.subscription, err = f.stanConn.QueueSubscribe(
-		f.Subject, f.Qgroup, mcb, startOpt, stan.DurableName(f.Durable),
+		f.Subject, f.Qgroup, mcb, f.startOpt, stan.DurableName(f.Durable),
 	)
 	if err != nil {
 		f.stanConn.Close()
-		return fmt.Errorf("Unable to subscribe: %s", err)
+		fmt.Errorf("Unable to subscribe: %s", err)
 	}
+
+	return nil
+}
+
+// Follow begins following the Subject in the NATS streaming host
+func (f *LogFollower) Follow() error {
+	f.startOpt = stan.StartAt(pb.StartPosition_NewOnly)
+
+	if f.StartSeq != 0 {
+		f.startOpt = stan.StartAtSequence(f.StartSeq)
+	} else if f.DeliverLast == true {
+		f.startOpt = stan.StartWithLastReceived()
+	} else if f.DeliverAll == true {
+		log.Print("subscribing with DeliverAllAvailable")
+		f.startOpt = stan.DeliverAllAvailable()
+	} else if f.StartDelta != "" {
+		ago, err := time.ParseDuration(f.StartDelta)
+		if err != nil {
+			f.stanConn.Close()
+			log.Fatal(err)
+		}
+		f.startOpt = stan.StartAtTimeDelta(ago)
+	}
+
+	err := f.subscribe()
+	if err != nil {
+		log.Error(err)
+	}
+
+	go f.manageConnection()
 
 	return nil
 }
@@ -138,6 +198,7 @@ func (f *LogFollower) Unfollow() {
 
 // Shutdown disconnects from the NATS streaming server
 func (f *LogFollower) Shutdown() {
+	f.quitChan <-struct{}{}
 	f.stanConn.Close()
 }
 
@@ -147,8 +208,9 @@ func main() {
 	var follower LogFollower
 	envconfig.Process("sub", &follower)
 	follower.batchedRecords = make(chan *message.Message, BatchSize)
+	follower.outPool = bpool.NewBytePool(2, OutRecordSize)
+	follower.quitChan = make(chan struct{})
 
-	fmt.Printf("%#v\n", follower)
 	if follower.ClientId == "" {
 		log.Printf("Error: A unique client ID must be specified.")
 		os.Exit(1)
@@ -178,7 +240,7 @@ func main() {
 	signal.Notify(signalChan, os.Interrupt)
 
 	<-signalChan
-	fmt.Printf("\nReceived an interrupt, unsubscribing and closing connection...\n\n")
+	log.Warnf("\nReceived an interrupt, unsubscribing and closing connection...\n\n")
 	// Do not unsubscribe a durable on exit, except if asked to.
 	if follower.Durable == "" || follower.Unsubscribe {
 		follower.Unfollow()

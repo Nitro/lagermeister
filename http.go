@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	DefaultPoolSize = 100
+	DefaultPoolSize       = 100
 	DefaultPoolMemberSize = 21 * 1024
 )
 
@@ -123,9 +123,11 @@ func (h *HttpRelay) relayMessage(msg *message.Message) {
 	}
 }
 
+// handlReceive is the HTTP endpoint that accepts log messages and send them on to
+// the message broker for further processing.
 func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
-	data, err := h.readAll(req.Body)
+	data, bytesRead, err := h.readAll(req.Body)
 
 	StatsMutex.Lock()
 	ProcessedCount += 1
@@ -140,7 +142,9 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 	}
 
 	var msg message.Message
-	proto.Unmarshal(data, &msg)
+	// Using a length limit is important here! Otherwise msg will include
+	// all the null chars at the end of the byte slice.
+	proto.Unmarshal(data[:bytesRead], &msg)
 
 	defer h.pool.Put(data)
 
@@ -157,10 +161,8 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 	}
 }
 
-func (h *HttpRelay) readAll(r io.Reader) (b []byte, err error) {
+func (h *HttpRelay) readAll(r io.Reader) (b []byte, bytesRead int, err error) {
 	buf := h.pool.Get()
-
-	var bytesRead int
 
 	for {
 		nBytes, err := r.Read(buf[bytesRead:])
@@ -171,17 +173,17 @@ func (h *HttpRelay) readAll(r io.Reader) (b []byte, err error) {
 		}
 
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
-	log.Infof("Bytes Read: %d", bytesRead)
+	log.Debugf("Bytes Read: %d", bytesRead)
 
 	if bytesRead == DefaultPoolMemberSize {
-		log.Warn("Possible message overflow")
+		log.Warnf("Possible message overflow, %d bytes read", bytesRead)
 	}
 
-	return buf, nil
+	return buf, bytesRead, nil
 }
 
 func main() {
