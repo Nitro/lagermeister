@@ -12,6 +12,7 @@ three main parts:
 1. **Message receiver**: Currently this requires POSTing individual Heka Protobuf
    messages to the HTTP endpoint. It will also support TCP streaming protocol
    once a suitable implementation is working at reasonable performance.
+   **location**: `http_recevier/`
 
 2. **NATS-Streaming Server**: Acts as a centralized buffer and subscription
    manager for log consumers. It will guarantee at-least-once delivery for each
@@ -26,6 +27,7 @@ three main parts:
    the performance of the system in question. More than one subscriber can be
    run from the same log subject as long as they are in the same subscriber group.
    In this way NATS-Streaming can load balance the subscribers.
+   **location**: `subscriber/`
 
 Configuration
 -------------
