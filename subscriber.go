@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"os/signal"
 	"time"
@@ -19,15 +21,28 @@ import (
 )
 
 const (
-	BatchSize      = 25
-	MaxEncodedSize = 21 * 1024 // Maximum encoded JSON size
-	OutRecordSize  = BatchSize*MaxEncodedSize + BatchSize + 10
-	CheckTime      = 5 * time.Second // Check the NATS connection
+	BatchSize          = 25
+	MaxEncodedSize     = 21 * 1024 // Maximum encoded JSON size
+	OutRecordSize      = BatchSize*MaxEncodedSize + BatchSize + 10
+	CheckTime          = 5 * time.Second  // Check the NATS connection
+	PosterPoolSize     = 10               // HTTP posters
+	DefaultHttpTimeout = 10 * time.Second // When posting to e.g. Sumologic
 )
 
-func printMsg(m *stan.Msg, i int) {
-	log.Printf("[#%d] Received on [%s]: '%s'\n", i, m.Subject, m)
+type MessageHandler interface {
+	HandleMessage(m *stan.Msg, i int) error
 }
+
+type PrintMessageHandler struct{}
+
+func (p *PrintMessageHandler) HandleMessage(m *stan.Msg, i int) error {
+	log.Printf("[#%d] Received on [%s]: '%s'\n", i, m.Subject, m)
+	return nil
+}
+
+var (
+	printer *PrintMessageHandler
+)
 
 type LogFollower struct {
 	ClusterId   string `envconfig:"CLUSTER_ID" default:"test-cluster"`
@@ -41,6 +56,7 @@ type LogFollower struct {
 	Unsubscribe bool   `envconfig:"UNSUBSCRIBE"`
 	NatsUrl     string `envconfig:"NATS_URL" default:"nats://localhost:4222"`
 	Subject     string `envconfig:"SUBJECT"`
+	RemoteUrl   string `envconfig:"REMOTE_URL" required:"true"`
 
 	stanConn       stan.Conn
 	subscription   stan.Subscription
@@ -49,6 +65,7 @@ type LogFollower struct {
 	outPool        *bpool.BytePool
 	quitChan       chan struct{}
 	startOpt       stan.SubscriptionOption
+	poster         *HttpMessagePoster
 }
 
 func NewLogFollower() *LogFollower {
@@ -107,14 +124,14 @@ func (f *LogFollower) SendBatch() {
 			continue
 		}
 
-		if startRec + len(buf) > len(data) {
+		if startRec+len(buf) > len(data) {
 			log.Warnf("Batch buffer size exceeded!")
 			f.send(data[:startRec])
 			return
 		}
 
 		copy(data[startRec:], buf)
-		startRec += len(buf) // TODO validate that this does the right thing!
+		startRec += len(buf)
 		data[startRec] = '\n'
 		startRec += 1
 
@@ -126,7 +143,8 @@ func (f *LogFollower) SendBatch() {
 }
 
 func (f *LogFollower) send(buf []byte) {
-	// TODO send these with HTTP or something
+	f.poster.Post(buf)
+	// TODO remove this when debugging is complete!
 	ioutil.WriteFile("out.json", buf, 0644)
 }
 
@@ -156,7 +174,7 @@ func (f *LogFollower) subscribe() error {
 	var i int
 	mcb := func(msg *stan.Msg) {
 		i++
-		printMsg(msg, i)
+		printer.HandleMessage(msg, i)
 		f.BatchRecord(msg)
 	}
 
@@ -179,6 +197,7 @@ func (f *LogFollower) Follow() error {
 	if f.StartSeq != 0 {
 		f.startOpt = stan.StartAtSequence(f.StartSeq)
 	} else if f.DeliverLast == true {
+		log.Info("Subscribing to only most recent")
 		f.startOpt = stan.StartWithLastReceived()
 	} else if f.DeliverAll == true {
 		log.Print("subscribing with DeliverAllAvailable")
@@ -209,20 +228,101 @@ func (f *LogFollower) Unfollow() {
 
 // Shutdown disconnects from the NATS streaming server
 func (f *LogFollower) Shutdown() {
-	f.quitChan <-struct{}{}
+	f.quitChan <- struct{}{}
 	f.stanConn.Close()
+}
+
+type HttpMessagePoster struct {
+	Url     string
+	Timeout time.Duration
+
+	client *http.Client
+	pool   chan struct{}
+}
+
+func NewHttpMessagePoster(url string, timeout time.Duration) *HttpMessagePoster {
+	poster := &HttpMessagePoster{
+		Url:     url,
+		Timeout: timeout,
+		client: &http.Client{
+			Timeout: timeout,
+		},
+		pool: make(chan struct{}, PosterPoolSize),
+	}
+
+	for i := 0; i < PosterPoolSize; i++ {
+		poster.pool <- struct{}{}
+	}
+
+	return poster
+}
+
+// Post is potentially blocking since it checks out a semaphore from
+// the pool. If the pool is maxxed out, the call will block until a
+// semaphore is returned to the pool.
+func (h *HttpMessagePoster) Post(data []byte) {
+	if h.client == nil {
+		log.Error("Client has not been initialized!")
+		return
+	}
+
+	// Post requires a Reader so we make one from the byte slice
+	buf := bytes.NewBuffer(data)
+
+	// Check out a semaphore so we don't have too many at once
+	log.Debugf("Free semaphores: %d/%d", len(h.pool), PosterPoolSize)
+	semaphore := <-h.pool
+	if len(h.pool) < 1 {
+		log.Warn("All semaphores in use!")
+	}
+
+	go func() {
+		startTime := time.Now()
+		defer func() {
+			log.Debugf("POST time taken: %s", time.Now().Sub(startTime))
+		}()
+
+		resp, err := h.client.Post(h.Url, "application/json", buf)
+		h.pool <- semaphore // This should not block if implemented properly
+
+		log.Debugf("Response code: %d", resp.StatusCode)
+
+		// TODO read this and log response on error
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+
+		if err != nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
+			log.Errorf(
+				"Error posting to %s. Status %d. Error: %s", h.Url, resp.StatusCode, err,
+			)
+		}
+	}()
 }
 
 func main() {
 	log.SetLevel(log.DebugLevel)
 
+	printer = &PrintMessageHandler{}
+
 	var follower LogFollower
-	envconfig.Process("sub", &follower)
+	err := envconfig.Process("sub", &follower)
+	if err != nil {
+		log.Errorf("Processing config: %s", err)
+		os.Exit(1)
+	}
 	rubberneck.Print(follower)
 
 	follower.batchedRecords = make(chan *message.Message, BatchSize)
 	follower.outPool = bpool.NewBytePool(2, OutRecordSize)
 	follower.quitChan = make(chan struct{})
+	follower.poster = NewHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout)
+
+	// Don't let people confuse this for a boolean option
+	if follower.Durable == "false" || follower.Durable == "true" {
+		log.Errorf("Invalid durable queue name: %s. This is not a boolean option.", follower.Durable)
+		os.Exit(1)
+	}
 
 	if follower.ClientId == "" {
 		log.Printf("Error: A unique client ID must be specified.")
@@ -233,7 +333,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	err := follower.Connect()
+	err = follower.Connect()
 	if err != nil {
 		log.Fatal(err)
 	}
