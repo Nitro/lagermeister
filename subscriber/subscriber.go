@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	_ "expvar"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -300,6 +301,10 @@ func (h *HttpMessagePoster) Post(data []byte) {
 	}()
 }
 
+func serveHttp() {
+	http.ListenAndServe(":34999", nil)
+}
+
 func main() {
 	log.SetLevel(log.DebugLevel)
 
@@ -351,6 +356,8 @@ func main() {
 	// Run cleanup when signal is received
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
+
+	go serveHttp()
 
 	<-signalChan
 	log.Warnf("\nReceived an interrupt, unsubscribing and closing connection...\n\n")
