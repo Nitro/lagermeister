@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/Nitro/lagermeister/message"
@@ -117,6 +116,7 @@ func (h *HttpRelay) relayMessage(msg *message.Message) {
 		if err == stan.ErrConnectionClosed || err == stan.ErrBadConnection ||
 			err == stan.ErrTimeout {
 
+			stats.Add("retryCount", 1)
 			log.Warnf("Retrying #%d publishing to NATS", i)
 			h.stanConn = nil
 
@@ -151,19 +151,26 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 		stats.Add("returnedPool", 1)
 	}()
 
-	if msg.Payload != nil {
-		niceTime := time.Unix(0, *msg.Timestamp)
-		if msg.Payload == nil || msg.Hostname == nil {
-			log.Warn("Missing fields!")
-			return
-		}
+	if (msg.Payload == nil && len(msg.Fields) == 0) || msg.Hostname == nil {
+		log.Warnf("Missing fields! %s", msg.String())
+		stats.Add("skipped", 1)
+		return
+	}
+
+	niceTime := time.Unix(0, *msg.Timestamp)
+	if msg.Payload == nil {
+		fmt.Printf("%s\n", msg.Fields)
+	} else {
 		fmt.Printf("%s %s: %#v\n", niceTime, *msg.Hostname, *msg.Payload)
-		if h.matcher == nil || h.matcher.Match(&msg) {
-			h.relayMessage(&msg)
-		}
+	}
+	if h.matcher == nil || h.matcher.Match(&msg) {
+		h.relayMessage(&msg)
 	}
 }
 
+// readAll will fetch as much as possible from the reader into a buffer
+// from the pool. It will stop reading when the buffer is full and
+// truncate the result. This is logged as a warning.
 func (h *HttpRelay) readAll(r io.Reader) (b []byte, bytesRead int, err error) {
 	buf := h.pool.Get()
 	stats.Add("getPool", 1)
@@ -194,14 +201,13 @@ func main() {
 	var relay HttpRelay
 	err := envconfig.Process("rcvr", &relay)
 	if err != nil {
-		log.Errorf("Unable to start: %s", err)
-		os.Exit(1)
+		log.Fatalf("Unable to start: %s", err)
 	}
 
 	rubberneck.Print(relay)
 
 	err = relay.Relay()
 	if err != nil {
-		panic(err)
+		log.Fatal(err.Error())
 	}
 }
