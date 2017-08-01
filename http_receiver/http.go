@@ -1,10 +1,10 @@
 package main
 
 import (
+	"expvar"
 	"fmt"
 	"io"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/Nitro/lagermeister/message"
@@ -21,8 +21,8 @@ const (
 
 var (
 	publishRetries = [...]int{250, 500, 1000, 3000, 5000} // Milliseconds
-	ProcessedCount int64
-	StatsMutex     sync.RWMutex
+
+	stats = expvar.NewMap("stats")
 )
 
 type HttpRelay struct {
@@ -107,6 +107,7 @@ func (h *HttpRelay) relayMessage(msg *message.Message) {
 
 		err = h.stanConn.Publish(h.Subject, data)
 		if err == nil {
+			stats.Add("publishedCount", 1)
 			break
 		}
 
@@ -120,6 +121,7 @@ func (h *HttpRelay) relayMessage(msg *message.Message) {
 		}
 
 		log.Errorf("Publishing: %s", err)
+		stats.Add("errorCount", 1)
 	}
 }
 
@@ -129,15 +131,10 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 	defer req.Body.Close()
 	data, bytesRead, err := h.readAll(req.Body)
 
-	StatsMutex.Lock()
-	ProcessedCount += 1
-	StatsMutex.Unlock()
-
-	if ProcessedCount%1000 == 0 {
-		log.Infof("Processed: %d", ProcessedCount)
-	}
+	stats.Add("receivedCount", 1)
 
 	if err != nil {
+		stats.Add("errorCount", 1)
 		log.Error(err)
 	}
 
@@ -146,7 +143,10 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 	// all the null chars at the end of the byte slice.
 	proto.Unmarshal(data[:bytesRead], &msg)
 
-	defer h.pool.Put(data)
+	defer func() {
+		h.pool.Put(data)
+		stats.Add("returnedPool", 1)
+	}()
 
 	if msg.Payload != nil {
 		niceTime := time.Unix(0, *msg.Timestamp)
@@ -163,6 +163,7 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 
 func (h *HttpRelay) readAll(r io.Reader) (b []byte, bytesRead int, err error) {
 	buf := h.pool.Get()
+	stats.Add("getPool", 1)
 
 	for {
 		nBytes, err := r.Read(buf[bytesRead:])
