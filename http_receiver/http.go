@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/Nitro/lagermeister/message"
 	log "github.com/Sirupsen/logrus"
 	"github.com/gogo/protobuf/proto"
+	"github.com/kelseyhightower/envconfig"
 	"github.com/nats-io/go-nats-streaming"
 	"github.com/oxtoacart/bpool"
+	"gopkg.in/relistan/rubberneck.v1"
 )
 
 const (
@@ -26,12 +29,12 @@ var (
 )
 
 type HttpRelay struct {
-	Address   string
-	NatsUrl   string
-	ClusterId string
-	ClientId  string
-	Subject   string
-	MatchSpec string // Heka message matcher
+	Address   string `envconfig:"BIND_ADDRESS" default:":35001"`
+	NatsUrl   string `envconfig:"NATS_URL" default:"nats://localhost:4222"`
+	ClusterId string `envconfig:"CLUSTER_ID" default:"test-cluster"`
+	ClientId  string `envconfig:"CLIENT_ID" required:"true"`
+	Subject   string `envconfig:"SUBJECT" default:"lagermeister-test"`
+	MatchSpec string `envconfig:"MATCH_SPEC"` // Heka message matcher
 
 	stanConn stan.Conn
 	matcher  *message.MatcherSpecification
@@ -188,16 +191,16 @@ func (h *HttpRelay) readAll(r io.Reader) (b []byte, bytesRead int, err error) {
 }
 
 func main() {
-	relay := &HttpRelay{
-		Address:   ":35001",
-		NatsUrl:   "nats://localhost:4222",
-		ClientId:  "lagermeister",
-		ClusterId: "test-cluster",
-		Subject:   "lagermeister-test",
-		//MatchSpec: "Logger == 'hekad' && Hostname == 'ubuntu'",
+	var relay HttpRelay
+	err := envconfig.Process("rcvr", &relay)
+	if err != nil {
+		log.Errorf("Unable to start: %s", err)
+		os.Exit(1)
 	}
 
-	err := relay.Relay()
+	rubberneck.Print(relay)
+
+	err = relay.Relay()
 	if err != nil {
 		panic(err)
 	}
