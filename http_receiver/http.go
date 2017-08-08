@@ -36,11 +36,12 @@ type HttpRelay struct {
 	Subject   string `envconfig:"SUBJECT" default:"lagermeister-test"`
 	MatchSpec string `envconfig:"MATCH_SPEC"` // Heka message matcher
 
-	stanConn  stan.Conn
-	matcher   *message.MatcherSpecification
-	pool      *bpool.BytePool
-	available bool
-	availLock sync.RWMutex
+	stanConn   stan.Conn
+	matcher    *message.MatcherSpecification
+	pool       *bpool.BytePool
+	available  bool
+	availLock  sync.RWMutex
+	connectSem chan struct{}
 }
 
 // Relay sets up the HTTP listener and the NATS client, then starts
@@ -57,12 +58,19 @@ func (h *HttpRelay) Relay() error {
 
 	h.pool = bpool.NewBytePool(DefaultPoolSize, DefaultPoolMemberSize)
 
+	// A semaphore to make sure we don't have multiple goroutines trying
+	// to reconnect at the same time later on.
+	h.connectSem = make(chan struct{}, 1)
+	h.connectSem <- struct{}{}
+
 	err = h.connectStan()
 	if err != nil {
 		return err // Already annotated in the connectStan function
 	}
 
 	http.HandleFunc("/", h.handleReceive)
+	http.HandleFunc("/health", h.handleHealth)
+
 	err = http.ListenAndServe(h.Address, nil)
 	if err != nil {
 		return fmt.Errorf("HTTP listener: %s", err)
@@ -75,19 +83,29 @@ func (h *HttpRelay) Relay() error {
 func (h *HttpRelay) connectStan() error {
 	var err error
 
-	h.stanConn, err = stan.Connect(
-		h.ClusterId, h.ClientId, stan.NatsURL(h.NatsUrl),
-		stan.ConnectWait(1*time.Second),
-		stan.PubAckWait(2*time.Second),
-	)
-	if err != nil {
-		// A ton of failures seem to derive from the Cluster ID not matching on
-		// connect. The error reported up from the stan package is not very
-		// helpful.
-		return fmt.Errorf("Connecting to NATS streaming: %s", err)
-	}
+	select {
+	case semaphore := <-h.connectSem:
+		defer func() { h.connectSem <- semaphore }()
 
-	h.breakerOff()
+		log.Infof("Attempting to connect to NATS streaming: %s clusterID=[%s] clientID=[%s]",
+			h.NatsUrl, h.ClusterId, h.ClientId,
+		)
+
+		h.stanConn, err = stan.Connect(
+			h.ClusterId, h.ClientId, stan.NatsURL(h.NatsUrl),
+			stan.ConnectWait(2*time.Second),
+			stan.PubAckWait(3*time.Second),
+		)
+		if err != nil {
+			// A ton of failures seem to derive from the Cluster ID not matching on
+			// connect. The error reported up from the stan package is not very
+			// helpful.
+			return fmt.Errorf("Connecting to NATS streaming: %s", err)
+		}
+
+		h.breakerOff()
+	default:
+	}
 
 	return nil
 }
@@ -113,8 +131,8 @@ func (h *HttpRelay) breakerOff() {
 }
 
 func (h *HttpRelay) isAvailable() bool {
-	h.availLock.Lock()
-	defer h.availLock.Unlock()
+	h.availLock.RLock()
+	defer h.availLock.RUnlock()
 
 	return h.available
 }
@@ -132,7 +150,7 @@ func (h *HttpRelay) relayMessage(msg *message.Message) {
 		if h.stanConn == nil {
 			log.Warn("Reconnecting to NATS")
 			err = h.connectStan()
-			if err != nil {
+			if err != nil || !h.isAvailable() {
 				log.Warnf("Retrying #%d publishing to NATS", i)
 				time.Sleep(time.Duration(sleepTime) * time.Millisecond)
 				continue
@@ -168,7 +186,14 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 	defer req.Body.Close()
 	data, bytesRead, err := h.readAll(req.Body)
 
+	// Make sure we put the buffer we got from readAll back in the pool!
+	defer func() {
+		h.pool.Put(data)
+		stats.Add("returnedPool", 1)
+	}()
+
 	stats.Add("receivedCount", 1)
+	response.Header().Set("Content-Type", "application/json")
 
 	// See if the circuit breaker is flipped on, push back to clients
 	// instead of attempting to queue and then dropping the message.
@@ -194,11 +219,6 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 	// all the null chars at the end of the byte slice.
 	proto.Unmarshal(data[:bytesRead], &msg)
 
-	defer func() {
-		h.pool.Put(data)
-		stats.Add("returnedPool", 1)
-	}()
-
 	if (msg.Payload == nil && len(msg.Fields) == 0) || msg.Hostname == nil {
 		log.Warnf("Missing fields! %s", msg.String())
 		stats.Add("skipped", 1)
@@ -214,6 +234,22 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 	if h.matcher == nil || h.matcher.Match(&msg) {
 		h.relayMessage(&msg)
 	}
+}
+
+func (h *HttpRelay) handleHealth(response http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+	response.Header().Set("Content-Type", "application/json")
+
+	if !h.isAvailable() {
+		http.Error(response, `{"status": "error", "message": "Circuit breaker is flipped!"}`, 502)
+		return
+	}
+
+	expvar.Do(func(kv expvar.KeyValue) {
+		if kv.Key == "stats" {
+			response.Write([]byte(kv.Value.String()))
+		}
+	})
 }
 
 // readAll will fetch as much as possible from the reader into a buffer
