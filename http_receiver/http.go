@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Nitro/lagermeister/message"
@@ -35,9 +36,11 @@ type HttpRelay struct {
 	Subject   string `envconfig:"SUBJECT" default:"lagermeister-test"`
 	MatchSpec string `envconfig:"MATCH_SPEC"` // Heka message matcher
 
-	stanConn stan.Conn
-	matcher  *message.MatcherSpecification
-	pool     *bpool.BytePool
+	stanConn  stan.Conn
+	matcher   *message.MatcherSpecification
+	pool      *bpool.BytePool
+	available bool
+	availLock sync.RWMutex
 }
 
 // Relay sets up the HTTP listener and the NATS client, then starts
@@ -84,7 +87,36 @@ func (h *HttpRelay) connectStan() error {
 		return fmt.Errorf("Connecting to NATS streaming: %s", err)
 	}
 
+	h.breakerOff()
+
 	return nil
+}
+
+// breakerOn flips the circuit breaker to on, so that we don't accept any
+// messages that we won't be able to store. We could end up dropping the
+// first message that has an issue because we don't actively manage the NATS
+// connection.
+func (h *HttpRelay) breakerOn() {
+	h.availLock.Lock()
+	h.available = false
+	log.Warn("Turning circuit breaker on!")
+	h.availLock.Unlock()
+}
+
+// breakerOff flips the circuit breaker to off so that we can process any new
+// incoming messages.
+func (h *HttpRelay) breakerOff() {
+	h.availLock.Lock()
+	h.available = true
+	log.Warn("Turning circuit breaker off!")
+	h.availLock.Unlock()
+}
+
+func (h *HttpRelay) isAvailable() bool {
+	h.availLock.Lock()
+	defer h.availLock.Unlock()
+
+	return h.available
 }
 
 // relayMessage publishes a message to NATS streaming. It is blocking and can
@@ -113,6 +145,8 @@ func (h *HttpRelay) relayMessage(msg *message.Message) {
 			break
 		}
 
+		h.breakerOn()
+
 		if err == stan.ErrConnectionClosed || err == stan.ErrBadConnection ||
 			err == stan.ErrTimeout {
 
@@ -135,6 +169,20 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 	data, bytesRead, err := h.readAll(req.Body)
 
 	stats.Add("receivedCount", 1)
+
+	// See if the circuit breaker is flipped on, push back to clients
+	// instead of attempting to queue and then dropping the message.
+	if !h.isAvailable() {
+		// Lazily try to reconnect and reset the breaker
+		h.connectStan()
+
+		if !h.isAvailable() {
+			log.Error("Breaker is off, refusing message!")
+			stats.Add("refusedCount", 1)
+			http.Error(response, `{"status": "error", "message": "Invalid NATS connection"}`, 502)
+			return
+		}
+	}
 
 	if err != nil {
 		stats.Add("errorCount", 1)
