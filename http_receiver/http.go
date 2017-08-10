@@ -90,7 +90,6 @@ func (h *HttpRelay) connectStan() error {
 		log.Infof("Attempting to connect to NATS streaming: %s clusterID=[%s] clientID=[%s]",
 			h.NatsUrl, h.ClusterId, h.ClientId,
 		)
-
 		h.stanConn, err = stan.Connect(
 			h.ClusterId, h.ClientId, stan.NatsURL(h.NatsUrl),
 			stan.ConnectWait(2*time.Second),
@@ -170,7 +169,7 @@ func (h *HttpRelay) relayMessage(msg *message.Message) {
 
 			stats.Add("retryCount", 1)
 			log.Warnf("Retrying #%d publishing to NATS", i)
-			h.stanConn = nil
+			h.stanConn.Close()
 
 			continue
 		}
