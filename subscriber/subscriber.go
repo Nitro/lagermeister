@@ -45,6 +45,8 @@ var (
 	printer *PrintMessageHandler
 )
 
+// LogFollower attaches to a subject on NATS streaming and processes new
+// log messages as they are received.
 type LogFollower struct {
 	ClusterId   string `envconfig:"CLUSTER_ID" default:"test-cluster"`
 	ClientId    string `envconfig:"CLIENT_ID"`
@@ -77,6 +79,7 @@ func NewLogFollower() *LogFollower {
 	}
 }
 
+// Connect initates a connection to the NATS streaming server.
 func (f *LogFollower) Connect() error {
 	var err error
 
@@ -230,7 +233,9 @@ func (f *LogFollower) Unfollow() {
 // Shutdown disconnects from the NATS streaming server
 func (f *LogFollower) Shutdown() {
 	f.quitChan <- struct{}{}
-	f.stanConn.Close()
+	if f.stanConn != nil {
+		f.stanConn.Close()
+	}
 }
 
 type HttpMessagePoster struct {
