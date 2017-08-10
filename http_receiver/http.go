@@ -224,11 +224,10 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	niceTime := time.Unix(0, *msg.Timestamp)
-	if msg.Payload == nil {
-		fmt.Printf("%s\n", msg.Fields)
+	if msg.Payload == nil || msg.Hostname == nil {
+		log.Debugf("%s\n", msg.Fields)
 	} else {
-		fmt.Printf("%s %s: %#v\n", niceTime, *msg.Hostname, *msg.Payload)
+		log.Debugf("%s: %#v\n", *msg.Hostname, *msg.Payload)
 	}
 	if h.matcher == nil || h.matcher.Match(&msg) {
 		h.relayMessage(&msg)
