@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"expvar"
-	"io/ioutil"
+	"io"
 	"net"
 	"time"
 
@@ -17,7 +17,7 @@ import (
 
 const (
 	DefaultPoolSize       = 100
-	DefaultPoolMemberSize = 21 * 1024
+	DefaultPoolMemberSize = 22 * 1024
 	DefaultKeepAlive      = 30 * time.Second
 )
 
@@ -25,15 +25,14 @@ var (
 	stats = expvar.NewMap("stats")
 )
 
-type TcpListener struct {
+type TcpRelay struct {
 	Address           string
-	OnConnect         func(net.Conn) error
 	KeepAlive         bool
 	KeepAliveDuration time.Duration
 	pool              *bpool.BytePool
 }
 
-func (t *TcpListener) Listen() {
+func (t *TcpRelay) Listen() {
 	t.pool = bpool.NewBytePool(DefaultPoolSize, DefaultPoolMemberSize)
 
 	listener, err := net.Listen("tcp", t.Address)
@@ -50,29 +49,20 @@ func (t *TcpListener) Listen() {
 				// This ought to be a TCP connection, and we want to set some
 				// connection settings, like keepalive. So cast and catch the
 				// error if it's not.
-				//tcpConn, ok := conn.(*net.TCPConn)
-				//if !ok {
-				//	// Not sure how we'd get here without an error in the stdlib.
-				//	log.Warn("Keepalive only supported on TCP, got something else!")
-				//	continue
-				//}
+				tcpConn, ok := conn.(*net.TCPConn)
+				if !ok {
+					// Not sure how we'd get here without an error in the stdlib.
+					log.Warn("Keepalive only supported on TCP, got something else!")
+					continue
+				}
 
-				//tcpConn.SetKeepAlive(t.KeepAlive)
-				//if t.KeepAliveDuration != 0 {
-				//	tcpConn.SetKeepAlivePeriod(t.KeepAliveDuration)
-				//}
+				// We want to do Keepalive on these connections, so set it up
+				tcpConn.SetKeepAlive(t.KeepAlive)
+				if t.KeepAliveDuration != 0 {
+					tcpConn.SetKeepAlivePeriod(t.KeepAliveDuration)
+				}
 
-				go func() {
-					if t.OnConnect != nil {
-						if err := t.OnConnect(conn); err != nil {
-							log.Errorf("Error on connect, disconnecting: %s", err)
-							conn.Close()
-							return
-						}
-					}
-
-					go t.handleConnection(conn)
-				}()
+				go t.handleConnection(conn)
 			}
 		}()
 	}
@@ -80,105 +70,191 @@ func (t *TcpListener) Listen() {
 	select {}
 }
 
-func (t *TcpListener) UnframeRecord(framed []byte) []byte {
-	headerLen := int(framed[1]) + message.HEADER_FRAMING_SIZE
-	unframed := framed[headerLen:]
-	return unframed
-}
+// parseHeader parses a Heka framing header. The format of a header is like this:
+//
+// Record Sep     | 0x1E
+// Header Len     | ..         <-- In practice only the 1st byte is used
+// Header Bytes   | .......
+// Header Framing | ..
+// Unit Sep       | 0x1F
+//
+// We only want to pass the Header Bytes to message.DecodeHeader.
+func parseHeader(start int, buf []byte) (*message.Header, error) {
+	headerLength := int(buf[start+1])
+	headerStart := start + message.HEADER_DELIMITER_SIZE
+	headerEnd := start + headerLength + message.HEADER_FRAMING_SIZE
 
-func (t *TcpListener) FindRecord(buffer []byte) (bytesRead int, record []byte, header *message.Header) {
+	var header message.Header
 
-	header = &message.Header{}
-
-	bytesRead = bytes.IndexByte(buffer, message.RECORD_SEPARATOR)
-	if bytesRead == -1 {
-		log.Debug("No record separator found")
-		bytesRead = len(buffer)
-		return bytesRead, nil, nil // read more data to find the start of the next message
-	}
-
-	if len(buffer) < bytesRead+message.HEADER_DELIMITER_SIZE {
-		log.Debugf("Buffer too small!: %d", len(buffer))
-		return bytesRead, nil, nil // read more data to get the header length byte
-	}
-
-	headerLength := int(buffer[bytesRead+1])
-	log.Debugf("Header length: %d", headerLength)
-
-	headerEnd := bytesRead + headerLength + message.HEADER_FRAMING_SIZE
-	if len(buffer) < headerEnd {
-		log.Debugf("Buffer too small, unable to read header!: %d", len(buffer))
-		return bytesRead, nil, nil // read more data to get the remainder of the header
-	}
-
-	hasHeader, err := message.DecodeHeader(
-		buffer[bytesRead+message.HEADER_DELIMITER_SIZE:headerEnd],
-		header,
+	_, err := message.DecodeHeader(
+		buf[headerStart:headerEnd],
+		&header,
 	)
-
 	if err != nil {
-		log.Errorf("Error finding record: %s", err)
+		return nil, err
 	}
 
-	var msg message.Message
+	log.Debugf("Header: %#v\nMessage Length: %d", header, header.GetMessageLength())
 
-	if header.MessageLength != nil || hasHeader {
-		log.Debugf("Message length: %d", *header.MessageLength)
-		messageEnd := headerEnd + int(header.GetMessageLength())
-		if len(buffer) < messageEnd {
-			return // read more data to get the remainder of the message
-		}
-		record = buffer[headerEnd:messageEnd]
-		ioutil.WriteFile("/Users/kmatthias/out.pbuf", record, 0644)
-		bytesRead = messageEnd
-
-		err = proto.Unmarshal(record, &msg)
-		if err != nil {
-			log.Errorf("Unable to deserialize Protobuf record: %s ", err)
-		}
-
-		header.Reset()
-	} else {
-		var n int
-		bytesRead++ // advance over the current record separator
-		n, record, header = t.FindRecord(buffer[bytesRead:])
-		bytesRead += n
-	}
-
-	return bytesRead, record, header
+	return &header, nil
 }
 
-func (t *TcpListener) handleConnection(conn net.Conn) {
-	buffer := t.pool.Get()
+// parseMessage takes a byte slice and unmarshals the Heka message it contains
+func parseMessage(start int, length int, buf []byte) (*message.Message, error) {
+	var msg message.Message
+	messageStart := start + 1 // Skip the unit separator
+	messageEnd := messageStart + length
 
-	defer func() {
-		t.pool.Put(buffer)
-		stats.Add("returnedPool", 1)
-	}()
-
-	stats.Add("receivedCount", 1)
-
-	readLen, err := conn.Read(buffer)
-
-	log.Infof("Read %d bytes", readLen)
-
-	if err == nil {
-		bytesRead, record, header := t.FindRecord(buffer)
-
-		log.Debugf("Read: %d\nRecord Read: %d\nMsg Length: %d\nHeader: %#v\n%s\nRecord: %#v\n",
-			readLen, bytesRead, header.MessageLength, header, string(buffer), string(record),
-		)
-	} else {
-		log.Errorf("Unable to read from socket: %s", err)
+	err := proto.Unmarshal(buf[messageStart:messageEnd], &msg)
+	if err != nil {
+		log.Warnf("Unable to deserialize protobuf message: %s", err)
+		return nil, err
 	}
 
+	return &msg, nil
+}
+
+// readSocket is a light wrapper around conn.Read
+func readSocket(conn net.Conn, buf []byte) (int, error) {
+	readLen, err := conn.Read(buf)
+	if err != nil && err != io.EOF {
+		stats.Add("readError", 1)
+	}
+
+	return readLen, err
+}
+
+// handleConnection handles the main work of the program, processing the
+// incoming data stream.
+func (t *TcpRelay) handleConnection(conn net.Conn) {
+	buf := t.pool.Get()
+	stats.Add("getPool", 1)
+
+	returnBuffer := func() {
+		t.pool.Put(buf)
+		stats.Add("returnedPool", 1)
+	}
+
+	var readLen, expectedLen int
+
+	// Just resets the readLen and re-uses the same buffer
+	reset := func() {
+		readLen = 0
+		expectedLen = -1
+	}
+
+	defer returnBuffer()
+
+	stats.Add("connectCount", 1)
+
+OUTER:
+	for {
+		log.Debug("---------------------")
+		log.Debugf("readLen: %d", readLen)
+
+		// Only read up to the expectedLen, so we can use a complete buffer for
+		// the next message.
+		var nBytes int
+		var err error
+
+		if expectedLen > 0 {
+			log.Debugf("s: %d, e: %d", readLen, expectedLen)
+			nBytes, err = readSocket(conn, buf[readLen:expectedLen+1])
+		} else {
+			nBytes, err = readSocket(conn, buf[readLen:])
+		}
+		readLen += nBytes
+
+		log.Debugf("nBytes: %d", nBytes)
+		if err != nil && err != io.EOF {
+			log.Errorf("Unable to read from socket: %s", err)
+			// Return so we don't even try to close the socket
+			return
+		}
+
+		if err == io.EOF {
+			// Causes us to close the socket outside the loop
+			break OUTER
+		}
+
+		firstHeader := bytes.IndexByte(buf[:readLen], message.RECORD_SEPARATOR)
+		firstMsg := bytes.IndexByte(buf[:readLen], message.UNIT_SEPARATOR)
+
+		// Do we have a complete header? If so, parse it!
+		var header *message.Header
+		if firstHeader == -1 && firstMsg == -1 {
+			// Just need to read more data
+			continue
+		}
+
+		// This happens if we got an unparseable header
+		if firstMsg < firstHeader {
+			stats.Add("invalidCount", 1)
+			log.Debug("Skipping invalid message")
+			continue
+		}
+
+		log.Debugf("firstHeader: %d, firstMsg: %d", firstHeader, firstMsg)
+
+		header, err = parseHeader(firstHeader, buf[:readLen])
+		if err != nil {
+			log.Warnf("Unable to parse header: %s", err)
+		}
+
+		if header.GetMessageLength() < 1 {
+			log.Warn("Header was not valid, missing message length")
+			reset()
+			continue
+		}
+
+		expectedLen = firstMsg + int(header.GetMessageLength()) + 1
+		log.Debugf("Expected Length: %d", expectedLen)
+
+		if expectedLen > cap(buf) {
+			log.Warn("Dropping message since it would exceed buffer capacity")
+			reset()
+			continue
+		}
+
+		// Read until we have enough to deserialize the body
+		if readLen < expectedLen {
+			// We could optimize here by reading again in a loop so we
+			// don't re-parse the header. But seems reasonable without that.
+			log.Debug("Not enough data, reading more")
+			continue
+		}
+
+		stats.Add("receivedCount", 1)
+
+		// parseMessage will limit the read length internally
+		msg, _ := parseMessage(firstMsg, int(header.GetMessageLength()), buf)
+		if msg == nil {
+			log.Error("Nil message!")
+			reset()
+			continue
+		}
+		if (msg.Payload == nil && len(msg.Fields) == 0) || msg.Hostname == nil {
+			log.Warnf("Missing fields! %s", msg.String())
+			stats.Add("skipped", 1)
+			reset()
+			continue
+		}
+
+		log.Debugf("Message: %#v", msg)
+		log.Debugf("Hostname: %v", *msg.Hostname)
+
+		// TODO relay the message here, before recycling the buffer!
+		reset()
+	}
+
+	log.Info("Disconnecting socket")
 	conn.Close()
 }
 
 func main() {
 	log.SetLevel(log.DebugLevel)
 
-	listener := &TcpListener{
+	listener := &TcpRelay{
 		Address:           "0.0.0.0:35000",
 		KeepAlive:         true,
 		KeepAliveDuration: DefaultKeepAlive,
