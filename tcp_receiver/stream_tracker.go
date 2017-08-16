@@ -169,6 +169,10 @@ func (s *StreamTracker) HandleOverread() (hadOverread bool) {
 	return true
 }
 
+func (s *StreamTracker) GetMessage() *message.Message {
+	return &s.msg
+}
+
 // Reset clears all the tracking information for the current message
 func (s *StreamTracker) Reset() {
 	s.readLen = 0

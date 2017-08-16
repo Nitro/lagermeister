@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sync"
-	"time"
 
 	"github.com/Nitro/lagermeister/message"
+	"github.com/Nitro/lagermeister/publisher"
 	log "github.com/Sirupsen/logrus"
 	"github.com/gogo/protobuf/proto"
 	"github.com/kelseyhightower/envconfig"
-	"github.com/nats-io/go-nats-streaming"
 	"github.com/oxtoacart/bpool"
 	"gopkg.in/relistan/rubberneck.v1"
 )
@@ -23,8 +21,6 @@ const (
 )
 
 var (
-	publishRetries = [...]int{250, 500, 1000, 3000, 5000} // Milliseconds
-
 	stats = expvar.NewMap("stats")
 )
 
@@ -36,12 +32,9 @@ type HttpRelay struct {
 	Subject   string `envconfig:"SUBJECT" default:"lagermeister-test"`
 	MatchSpec string `envconfig:"MATCH_SPEC"` // Heka message matcher
 
-	stanConn   stan.Conn
 	matcher    *message.MatcherSpecification
 	pool       *bpool.BytePool
-	available  bool
-	availLock  sync.RWMutex
-	connectSem chan struct{}
+	connection *publisher.StanPublisher
 }
 
 // Relay sets up the HTTP listener and the NATS client, then starts
@@ -58,14 +51,12 @@ func (h *HttpRelay) Relay() error {
 
 	h.pool = bpool.NewBytePool(DefaultPoolSize, DefaultPoolMemberSize)
 
-	// A semaphore to make sure we don't have multiple goroutines trying
-	// to reconnect at the same time later on.
-	h.connectSem = make(chan struct{}, 1)
-	h.connectSem <- struct{}{}
-
-	err = h.connectStan()
-	if err != nil {
-		return err // Already annotated in the connectStan function
+	h.connection = &publisher.StanPublisher{
+		NatsUrl:   h.NatsUrl,
+		ClusterId: h.ClusterId,
+		ClientId:  h.ClientId,
+		Subject:   h.Subject,
+		Stats:     stats,
 	}
 
 	http.HandleFunc("/", h.handleReceive)
@@ -77,106 +68,6 @@ func (h *HttpRelay) Relay() error {
 	}
 
 	return nil
-}
-
-// connectStan connects to the NATS streaming cluster
-func (h *HttpRelay) connectStan() error {
-	var err error
-
-	select {
-	case semaphore := <-h.connectSem:
-		defer func() { h.connectSem <- semaphore }()
-
-		log.Infof("Attempting to connect to NATS streaming: %s clusterID=[%s] clientID=[%s]",
-			h.NatsUrl, h.ClusterId, h.ClientId,
-		)
-		h.stanConn, err = stan.Connect(
-			h.ClusterId, h.ClientId, stan.NatsURL(h.NatsUrl),
-			stan.ConnectWait(2*time.Second),
-			stan.PubAckWait(3*time.Second),
-		)
-		if err != nil {
-			// A ton of failures seem to derive from the Cluster ID not matching on
-			// connect. The error reported up from the stan package is not very
-			// helpful.
-			return fmt.Errorf("Connecting to NATS streaming: %s", err)
-		}
-
-		h.breakerOff()
-	default:
-	}
-
-	return nil
-}
-
-// breakerOn flips the circuit breaker to on, so that we don't accept any
-// messages that we won't be able to store. We could end up dropping the
-// first message that has an issue because we don't actively manage the NATS
-// connection.
-func (h *HttpRelay) breakerOn() {
-	h.availLock.Lock()
-	h.available = false
-	log.Warn("Turning circuit breaker on!")
-	h.availLock.Unlock()
-}
-
-// breakerOff flips the circuit breaker to off so that we can process any new
-// incoming messages.
-func (h *HttpRelay) breakerOff() {
-	h.availLock.Lock()
-	h.available = true
-	log.Warn("Turning circuit breaker off!")
-	h.availLock.Unlock()
-}
-
-func (h *HttpRelay) isAvailable() bool {
-	h.availLock.RLock()
-	defer h.availLock.RUnlock()
-
-	return h.available
-}
-
-// relayMessage publishes a message to NATS streaming. It is blocking and can
-// hold onto the goroutine for several seconds so it should be run only where
-// that won't cause any performance issues.
-func (h *HttpRelay) relayMessage(msg *message.Message) {
-	data, err := msg.Marshal()
-	if err != nil {
-		log.Errorf("Encoding: %s", err)
-	}
-
-	for i, sleepTime := range publishRetries {
-		if h.stanConn == nil {
-			log.Warn("Reconnecting to NATS")
-			err = h.connectStan()
-			if err != nil || !h.isAvailable() {
-				log.Warnf("Retrying #%d publishing to NATS", i)
-				time.Sleep(time.Duration(sleepTime) * time.Millisecond)
-				continue
-			}
-		}
-
-		err = h.stanConn.Publish(h.Subject, data)
-		if err == nil {
-			stats.Add("publishedCount", 1)
-			break
-		}
-
-		h.breakerOn()
-
-		if err == stan.ErrConnectionClosed || err == stan.ErrBadConnection ||
-			err == stan.ErrTimeout {
-
-			stats.Add("retryCount", 1)
-			log.Warnf("Retrying #%d publishing to NATS", i)
-			h.stanConn.Close()
-
-			continue
-		}
-
-		log.Errorf("Publishing: %s", err)
-		stats.Add("errorCount", 1)
-	}
 }
 
 // handlReceive is the HTTP endpoint that accepts log messages and send them on to
@@ -196,11 +87,11 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 
 	// See if the circuit breaker is flipped on, push back to clients
 	// instead of attempting to queue and then dropping the message.
-	if !h.isAvailable() {
+	if !h.connection.IsAvailable() {
 		// Lazily try to reconnect and reset the breaker
-		h.connectStan()
+		h.connection.Connect()
 
-		if !h.isAvailable() {
+		if !h.connection.IsAvailable() {
 			log.Error("Breaker is off, refusing message!")
 			stats.Add("refusedCount", 1)
 			http.Error(response, `{"status": "error", "message": "Invalid NATS connection"}`, 502)
@@ -225,12 +116,12 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 	}
 
 	if msg.Payload == nil || msg.Hostname == nil {
-		log.Debugf("%s\n", msg.Fields)
+		log.Debugf("Missing fields: %s\n", msg.Fields)
 	} else {
-		log.Debugf("%s: %#v\n", *msg.Hostname, *msg.Payload)
+		log.Debugf("Hostname: %s Payload: %#v\n", *msg.Hostname, *msg.Payload)
 	}
 	if h.matcher == nil || h.matcher.Match(&msg) {
-		h.relayMessage(&msg)
+		h.connection.RelayMessage(&msg)
 	}
 }
 
@@ -238,7 +129,7 @@ func (h *HttpRelay) handleHealth(response http.ResponseWriter, req *http.Request
 	defer req.Body.Close()
 	response.Header().Set("Content-Type", "application/json")
 
-	if !h.isAvailable() {
+	if !h.connection.IsAvailable() {
 		http.Error(response, `{"status": "error", "message": "Circuit breaker is flipped!"}`, 502)
 		return
 	}

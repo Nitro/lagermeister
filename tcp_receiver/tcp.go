@@ -2,12 +2,17 @@ package main
 
 import (
 	"expvar"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/Nitro/lagermeister/message"
+	"github.com/Nitro/lagermeister/publisher"
 	log "github.com/Sirupsen/logrus"
+	"github.com/kelseyhightower/envconfig"
 	"github.com/oxtoacart/bpool"
+	"gopkg.in/relistan/rubberneck.v1"
 )
 
 const (
@@ -21,28 +26,54 @@ var (
 )
 
 type TcpRelay struct {
-	Address           string
+	Address      string `envconfig:"BIND_ADDRESS" default:":35000"`
+	NatsUrl      string `envconfig:"NATS_URL" default:"nats://localhost:4222"`
+	ClusterId    string `envconfig:"CLUSTER_ID" default:"test-cluster"`
+	ClientId     string `envconfig:"CLIENT_ID" required:"true"`
+	Subject      string `envconfig:"SUBJECT" default:"lagermeister-test"`
+	MatchSpec    string `envconfig:"MATCH_SPEC"` // Heka message matcher
+	StatsAddress string `envconfig:"STATS_ADDRESS" default:":34999"`
+	ListenCount  int    `envconfig:"LISTEN_COUNT" default:"20"`
+
 	KeepAlive         bool
 	KeepAliveDuration time.Duration
+
 	pool              *bpool.BytePool
+	matcher           *message.MatcherSpecification
+	connection *publisher.StanPublisher
 }
 
-func (t *TcpRelay) Listen(numListeners int) {
+func (t *TcpRelay) Listen() error {
 	t.pool = bpool.NewBytePool(DefaultPoolSize, DefaultPoolMemberSize)
+	// Set up the publisher, passing along the configuration
+	t.connection = &publisher.StanPublisher{
+		NatsUrl:   t.NatsUrl,
+		ClusterId: t.ClusterId,
+		ClientId:  t.ClientId,
+		Subject:   t.Subject,
+		Stats:     stats,
+	}
+	err := t.connection.Connect()
+	if err != nil {
+		return fmt.Errorf("Error starting NATS connection: %s", err)
+	}
 
 	listener, err := net.Listen("tcp", t.Address)
 	if err != nil {
-		log.Fatal("Error starting TCP server.")
+		return fmt.Errorf("Error starting TCP server: %s", err)
 	}
-	defer listener.Close()
 
 	// We have a fixed number of listeners, each of which will spawn a goroutine
 	// for each incoming connection. That goroutine will be dedicated to the
 	// connection for its lifesspan and will exit afterward.
-	for i := 0; i < numListeners; i++ {
+	for i := 0; i < t.ListenCount; i++ {
 		go func() {
 			for {
-				conn, _ := listener.Accept()
+				conn, err := listener.Accept()
+				if err != nil {
+					log.Errorf("Error accepting connection! (%s)", err)
+					continue
+				}
 
 				// This ought to be a TCP connection, and we want to set some
 				// connection settings, like keepalive. So cast and catch the
@@ -50,7 +81,7 @@ func (t *TcpRelay) Listen(numListeners int) {
 				tcpConn, ok := conn.(*net.TCPConn)
 				if !ok {
 					// Not sure how we'd get here without an error in the stdlib.
-					log.Warn("Keepalive only supported on TCP, got something else!")
+					log.Warn("Keepalive only supported on TCP, got something else! (%#v)", conn)
 					continue
 				}
 
@@ -65,7 +96,7 @@ func (t *TcpRelay) Listen(numListeners int) {
 		}()
 	}
 
-	select {}
+	return nil
 }
 
 // handleConnection handles the main work of the program, processing the
@@ -74,7 +105,7 @@ func (t *TcpRelay) handleConnection(conn net.Conn) {
 
 	stats.Add("connectCount", 1)
 	stream := NewStreamTracker(t.pool) // Allocate a StreamTracker and get buffer from pool
-	defer stream.CleanUp() // Return buffer to pool when we're done
+	defer stream.CleanUp()             // Return buffer to pool when we're done
 
 	for {
 		log.Debug("---------------------")
@@ -143,8 +174,15 @@ func (t *TcpRelay) handleConnection(conn net.Conn) {
 			continue
 		}
 
-		// TODO relay the message here, before recycling the buffer!
-		// Once the buffer is recycled, pointers into it are non-deterministic
+		// This has to happen before cleaning up the buffer.
+		msg := stream.GetMessage()
+		if t.matcher == nil || t.matcher.Match(msg) {
+			// XXX we can substantially improve performance by handling
+			// message relaying in a thread pool instead of on the main
+			// goroutine. Will involve holding onto the buffer, and would
+			// require different behavior here.
+			t.connection.RelayMessage(msg)
+		}
 
 		// If we took in more than one message in this read, we need to get a new
 		// buffer and populate it with the remaining data and set the readLen.
@@ -158,16 +196,20 @@ func (t *TcpRelay) handleConnection(conn net.Conn) {
 }
 
 func main() {
-	log.SetLevel(log.DebugLevel)
+	var relay TcpRelay
+	envconfig.Process("tcprcvr", &relay)
+	relay.KeepAlive = true
+	relay.KeepAliveDuration = DefaultKeepAlive
 
-	// Stats listener
-	go http.ListenAndServe("0.0.0.0:34999", nil)
+	rubberneck.Print(relay)
 
-	listener := &TcpRelay{
-		Address:           "0.0.0.0:35000",
-		KeepAlive:         true,
-		KeepAliveDuration: DefaultKeepAlive,
+	// Stats relay
+	go http.ListenAndServe(relay.StatsAddress, nil)
+
+	err := relay.Listen()
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	listener.Listen(20)
+	select {}
 }
