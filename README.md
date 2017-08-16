@@ -9,10 +9,14 @@ and forwarding to a logging system like Sumologic.
 It uses NATS-streaming to act as the main message buffer and is comprised of
 three main parts:
 
-1. **Message receiver**: Currently this requires POSTing individual Heka Protobuf
-   messages to the HTTP endpoint. It will also support TCP streaming protocol
-   once a suitable implementation is working at reasonable performance.
-   **location**: `http_recevier/`
+1. **Message receiver**: There are two implementations of the message receiver:
+   an HTTP receiver and a TCP streaming receiver that processes HekaFraming
+   messages. Both receiver expect Heka protobuf messages. A single stream can
+   push about 5500 3KB messages per second currently. The HTTP receiver should
+   be able to handle substantially more, though with a much larger network
+   footprint. Each streaming receiver should be able to handle thousands of
+   open connections.
+   **location**: `http_recevier/`, `tcp_receiver`
 
 2. **NATS-Streaming Server**: Acts as a centralized buffer and subscription
    manager for log consumers. It will guarantee at-least-once delivery for each
