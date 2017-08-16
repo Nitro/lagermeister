@@ -71,48 +71,6 @@ func (t *TcpRelay) Listen() {
 	select {}
 }
 
-// parseHeader parses a Heka framing header. The format of a header is like this:
-//
-// Record Sep     | 0x1E
-// Header Len     | ..         <-- In practice only the 1st byte is used
-// Header Bytes   | .......
-// Header Framing | ..
-// Unit Sep       | 0x1F
-//
-// We only want to pass the Header Bytes to message.DecodeHeader.
-func parseHeader(start int, buf []byte) (*message.Header, error) {
-	headerLength := int(buf[start+1])
-	headerStart := start + message.HEADER_DELIMITER_SIZE
-	headerEnd := start + headerLength + message.HEADER_FRAMING_SIZE
-
-	var header message.Header
-
-	_, err := message.DecodeHeader(
-		buf[headerStart:headerEnd],
-		&header,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return &header, nil
-}
-
-// parseMessage takes a byte slice and unmarshals the Heka message it contains
-func parseMessage(start int, length int, buf []byte) (*message.Message, error) {
-	var msg message.Message
-	messageStart := start + 1 // Skip the unit separator
-	messageEnd := messageStart + length
-
-	err := proto.Unmarshal(buf[messageStart:messageEnd], &msg)
-	if err != nil {
-		log.Warnf("Unable to deserialize protobuf message: %s", err)
-		return nil, err
-	}
-
-	return &msg, nil
-}
-
 // readSocket is a light wrapper around conn.Read
 func readSocket(conn net.Conn, buf []byte) (int, error) {
 	readLen, err := conn.Read(buf)
@@ -123,145 +81,262 @@ func readSocket(conn net.Conn, buf []byte) (int, error) {
 	return readLen, err
 }
 
+type StreamTracker struct {
+	expectedLen  int
+	readLen      int
+	buf          []byte
+	header       message.Header
+	msg          message.Message
+	firstHeader  int
+	firstMessage int
+	foundHeader  bool
+	Pool         *bpool.BytePool
+}
+
+func (s *StreamTracker) Read(conn net.Conn) (keepProcessing bool, finished bool) {
+	var (
+		err       error
+		nBytes int
+	)
+
+	log.Debugf("readLen: %d", s.readLen)
+
+	if s.expectedLen > 0 {
+		nBytes, err = readSocket(conn, s.buf[s.readLen:s.expectedLen])
+	} else {
+		nBytes, err = readSocket(conn, s.buf[s.readLen:])
+	}
+	s.readLen += nBytes
+
+	log.Debugf("nBytes: %d", nBytes)
+	if err != nil && err != io.EOF {
+		log.Errorf("Unable to read from socket: %s", err)
+		// Return so we don't even try to close the socket
+		return false, true
+	}
+
+	// TODO move this farther down so we can complete the last message!
+	if err == io.EOF {
+		// Causes us to close the socket outside the loop
+		return false, true
+	}
+
+	return true, false
+}
+
+// FindHeaderMarker returns the first header found in the stream
+func (s *StreamTracker) FindHeader() (found bool) {
+	s.firstHeader = bytes.IndexByte(s.buf[:s.readLen], message.RECORD_SEPARATOR)
+	if s.firstHeader != -1 {
+		return true
+	}
+
+	return false
+}
+
+// FindMessageMarker returns the first message found in the stream
+func (s *StreamTracker) FindMessage() (found bool) {
+	s.firstMessage = bytes.IndexByte(s.buf[:s.readLen], message.UNIT_SEPARATOR)
+	if s.firstMessage != -1 {
+		return true
+	}
+
+	return false
+}
+
+func (s *StreamTracker) IsValid() bool {
+	log.Debugf("firstHeader: %d, firstMsg: %d", s.firstHeader, s.firstMessage)
+	// The header should always be before the message
+	return s.firstHeader < s.firstMessage
+}
+
+// ParseHeader parses a Heka framing header. The format of a header is like this:
+//
+// Record Sep     | 0x1E
+// Header Len     | ..         <-- In practice only the 1st byte is used
+// Header Bytes   | .......
+// Header Framing | ..
+// Unit Sep       | 0x1F
+//
+// We only want to pass the Header Bytes to message.DecodeHeader.
+func (s *StreamTracker) ParseHeader() error {
+	headerLength := int(s.buf[s.firstHeader+1])
+	headerStart := s.firstHeader + message.HEADER_DELIMITER_SIZE
+	headerEnd := s.firstHeader + headerLength + message.HEADER_FRAMING_SIZE
+
+	_, err := message.DecodeHeader(
+		s.buf[headerStart:headerEnd],
+		&s.header,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Now that we have a header, we can tell how long this message is
+	s.expectedLen = s.firstMessage + int(s.header.GetMessageLength()) + 1
+
+	return nil
+}
+
+// parseMessage takes a byte slice and unmarshals the Heka message it contains
+func (s *StreamTracker) ParseMessage() (ok bool, err error) {
+	messageStart := s.firstMessage + 1 // Skip the unit separator
+	messageEnd := messageStart + int(s.header.GetMessageLength())
+
+	err = proto.Unmarshal(s.buf[messageStart:messageEnd], &s.msg)
+	if err != nil {
+		return false, err
+	}
+
+	// If we got a message but we don't have the important fields
+	if (s.msg.Payload == nil && len(s.msg.Fields) == 0) || s.msg.Hostname == nil {
+		log.Warnf("Missing fields! %s", s.msg.String())
+		return false, nil
+	}
+
+	log.Debugf("Message: %#v", s.msg)
+	log.Debugf("Hostname: %v", *s.msg.Hostname)
+
+	return true, nil
+}
+
+func (s *StreamTracker) HasEnoughCapacity() bool {
+	return s.expectedLen < cap(s.buf)
+}
+
+func (s *StreamTracker) HasReadEntireMessage() bool {
+	return s.readLen >= s.expectedLen
+}
+
+func (s *StreamTracker) HandleOverread() (hadOverread bool) {
+	if s.readLen <= s.expectedLen {
+		return false
+	}
+
+	log.Debugf("Over-read %d bytes, cycling buffer", s.readLen-s.expectedLen)
+
+	stats.Add("getPool", 1)
+	buf2 := s.Pool.Get()
+	copy(buf2, s.buf[s.expectedLen:s.readLen])
+	s.Pool.Put(s.buf)
+	stats.Add("returnedPool", 1)
+	s.buf = buf2
+
+	// Reset the counters to the new length
+	tmpReadLen := s.readLen - s.expectedLen
+	s.Reset()
+	s.readLen = tmpReadLen
+
+	return true
+}
+
+// Reset clears all the tracking information for the current message
+func (s *StreamTracker) Reset() {
+	s.readLen = 0
+	s.expectedLen = -1
+	s.header = message.Header{}
+	s.firstHeader = -1
+	s.firstMessage = -1
+	s.foundHeader = false
+}
+
+func NewStreamTracker(pool *bpool.BytePool) *StreamTracker {
+	stream := &StreamTracker{Pool: pool}
+	stream.buf = pool.Get()
+	stats.Add("getPool", 1)
+	stream.Reset()
+
+	return stream
+}
+
+func (s *StreamTracker) CleanUp() {
+	// Put the buffer back in the buffer pool
+	s.Pool.Put(s.buf)
+	stats.Add("returnedPool", 1)
+}
+
 // handleConnection handles the main work of the program, processing the
 // incoming data stream.
 func (t *TcpRelay) handleConnection(conn net.Conn) {
-	buf := t.pool.Get()
-	stats.Add("getPool", 1)
-
-	// Return the buffer to the pool and keep stats about pool use
-	defer func() {
-		t.pool.Put(buf)
-		stats.Add("returnedPool", 1)
-	}()
-
-	var readLen, expectedLen int
-
-	// Just resets the readLen/expectedLen and re-uses the same buffer
-	reset := func() {
-		readLen = 0
-		expectedLen = -1
-	}
 
 	stats.Add("connectCount", 1)
+	stream := NewStreamTracker(t.pool)
+	defer stream.CleanUp() // Return buffer to pool when we're done
 
-OUTER:
 	for {
 		log.Debug("---------------------")
-		log.Debugf("readLen: %d", readLen)
-
-		// Only read up to the expectedLen, so we can use a complete buffer for
-		// the next message.
-		var nBytes int
 		var err error
 
-		if expectedLen > 0 {
-			nBytes, err = readSocket(conn, buf[readLen:expectedLen])
-		} else {
-			nBytes, err = readSocket(conn, buf[readLen:])
+		// Try to read from the stream and deal with the result
+		keepProcessing, finished := stream.Read(conn)
+		if finished {
+			break
 		}
-		readLen += nBytes
-
-		log.Debugf("nBytes: %d", nBytes)
-		if err != nil && err != io.EOF {
-			log.Errorf("Unable to read from socket: %s", err)
-			// Return so we don't even try to close the socket
-			return
+		if !keepProcessing {
+			continue
 		}
 
-		// TODO move this farther down so we can complete the last message!
-		if err == io.EOF {
-			// Causes us to close the socket outside the loop
-			break OUTER
-		}
-
-		firstHeader := bytes.IndexByte(buf[:readLen], message.RECORD_SEPARATOR)
-		firstMsg := bytes.IndexByte(buf[:readLen], message.UNIT_SEPARATOR)
-
-		// Do we have a complete header? If so, parse it!
-		var header *message.Header
-		if firstHeader == -1 && firstMsg == -1 {
+		if !stream.FindHeader() || !stream.FindMessage() {
 			// Just need to read more data
 			continue
 		}
 
 		// This happens if we got an unparseable header
-		if firstMsg < firstHeader {
+		if !stream.IsValid() {
 			stats.Add("invalidCount", 1)
 			log.Warn("Skipping invalid message")
-			reset()
+			stream.Reset()
 			continue
 		}
 
-		log.Debugf("firstHeader: %d, firstMsg: %d", firstHeader, firstMsg)
-
-		header, err = parseHeader(firstHeader, buf[:readLen])
+		// We should now have a header, so let's parse it
+		err = stream.ParseHeader()
 		if err != nil {
 			log.Warnf("Unable to parse header: %s", err)
-		}
-
-		if header.GetMessageLength() < 1 {
-			header, err = parseHeader(firstHeader, buf[1:readLen])
-			log.Warn("Header was not valid, missing message length")
-			reset()
+			stream.Reset()
 			continue
 		}
 
-		expectedLen = firstMsg + int(header.GetMessageLength()) + 1
-		log.Debugf("Expected Length: %d", expectedLen)
-
-		if expectedLen > cap(buf) {
+		if !stream.HasEnoughCapacity() {
 			log.Warn("Dropping message since it would exceed buffer capacity")
-			reset()
+			stream.Reset()
 			continue
 		}
 
 		// Read until we have enough to deserialize the body
-		if readLen < expectedLen {
+		if !stream.HasReadEntireMessage() {
 			// We could optimize here by reading again in a loop so we
-			// don't re-parse the header. But seems reasonable without that.
+			// don't re-parse the header. But, once the stream is warmed up,
+			// we almost always get a whole message on the first read. So
+			// optimizing is kinda silly.
 			log.Debug("Not enough data, reading more")
 			continue
 		}
 
+		// We got the whole thing, so count it
 		stats.Add("receivedCount", 1)
 
-		// parseMessage will limit the read length internally
-		msg, _ := parseMessage(firstMsg, int(header.GetMessageLength()), buf)
-		if msg == nil {
-			log.Error("Nil message!")
-			reset()
-			continue
-		}
-		if (msg.Payload == nil && len(msg.Fields) == 0) || msg.Hostname == nil {
-			log.Warnf("Missing fields! %s", msg.String())
+		ok, err := stream.ParseMessage()
+		if err != nil {
 			stats.Add("skipped", 1)
-			reset()
+			log.Warnf("Unable to deserialize protobuf message: %s", err)
+			stream.Reset()
 			continue
 		}
-
-		log.Debugf("Message: %#v", msg)
-		log.Debugf("Hostname: %v", *msg.Hostname)
+		if !ok {
+			stats.Add("skipped", 1)
+			log.Warn("Nil message or missing required fields!")
+			stream.Reset()
+			continue
+		}
 
 		// TODO relay the message here, before recycling the buffer!
+		// Once the buffer is recycled, pointers into it are non-deterministic
 
 		// If we took in more than one message in this read, we need to get a new
-		// buffer and populate it with the remaining data. We also need to set the
-		// readLen to the correct new length.
-		if (expectedLen > 0) && (readLen > expectedLen) {
-			log.Warnf("Over-read %d bytes, cycling", readLen - expectedLen)
-			stats.Add("getPool", 1)
-			buf2 := t.pool.Get()
-			copy(buf2, buf[expectedLen:readLen])
-			t.pool.Put(buf)
-			stats.Add("returnedPool", 1)
-			buf = buf2
-
-			// Reset the counters to the new length and expectedLength
-			readLen = readLen - expectedLen
-			expectedLen = -1
-		} else {
-			reset()
+		// buffer and populate it with the remaining data and set the readLen.
+		if !stream.HandleOverread() {
+			stream.Reset()
 		}
 	}
 
