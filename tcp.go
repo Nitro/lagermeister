@@ -5,6 +5,7 @@ import (
 	"expvar"
 	"io"
 	"net"
+	"net/http"
 	"time"
 
 	"github.com/Nitro/lagermeister/message"
@@ -94,8 +95,6 @@ func parseHeader(start int, buf []byte) (*message.Header, error) {
 		return nil, err
 	}
 
-	log.Debugf("Header: %#v\nMessage Length: %d", header, header.GetMessageLength())
-
 	return &header, nil
 }
 
@@ -130,20 +129,19 @@ func (t *TcpRelay) handleConnection(conn net.Conn) {
 	buf := t.pool.Get()
 	stats.Add("getPool", 1)
 
-	returnBuffer := func() {
+	// Return the buffer to the pool and keep stats about pool use
+	defer func() {
 		t.pool.Put(buf)
 		stats.Add("returnedPool", 1)
-	}
+	}()
 
 	var readLen, expectedLen int
 
-	// Just resets the readLen and re-uses the same buffer
+	// Just resets the readLen/expectedLen and re-uses the same buffer
 	reset := func() {
 		readLen = 0
 		expectedLen = -1
 	}
-
-	defer returnBuffer()
 
 	stats.Add("connectCount", 1)
 
@@ -158,8 +156,7 @@ OUTER:
 		var err error
 
 		if expectedLen > 0 {
-			log.Debugf("s: %d, e: %d", readLen, expectedLen)
-			nBytes, err = readSocket(conn, buf[readLen:expectedLen+1])
+			nBytes, err = readSocket(conn, buf[readLen:expectedLen])
 		} else {
 			nBytes, err = readSocket(conn, buf[readLen:])
 		}
@@ -172,6 +169,7 @@ OUTER:
 			return
 		}
 
+		// TODO move this farther down so we can complete the last message!
 		if err == io.EOF {
 			// Causes us to close the socket outside the loop
 			break OUTER
@@ -190,7 +188,8 @@ OUTER:
 		// This happens if we got an unparseable header
 		if firstMsg < firstHeader {
 			stats.Add("invalidCount", 1)
-			log.Debug("Skipping invalid message")
+			log.Warn("Skipping invalid message")
+			reset()
 			continue
 		}
 
@@ -202,6 +201,7 @@ OUTER:
 		}
 
 		if header.GetMessageLength() < 1 {
+			header, err = parseHeader(firstHeader, buf[1:readLen])
 			log.Warn("Header was not valid, missing message length")
 			reset()
 			continue
@@ -244,7 +244,25 @@ OUTER:
 		log.Debugf("Hostname: %v", *msg.Hostname)
 
 		// TODO relay the message here, before recycling the buffer!
-		reset()
+
+		// If we took in more than one message in this read, we need to get a new
+		// buffer and populate it with the remaining data. We also need to set the
+		// readLen to the correct new length.
+		if (expectedLen > 0) && (readLen > expectedLen) {
+			log.Warnf("Over-read %d bytes, cycling", readLen - expectedLen)
+			stats.Add("getPool", 1)
+			buf2 := t.pool.Get()
+			copy(buf2, buf[expectedLen:readLen])
+			t.pool.Put(buf)
+			stats.Add("returnedPool", 1)
+			buf = buf2
+
+			// Reset the counters to the new length and expectedLength
+			readLen = readLen - expectedLen
+			expectedLen = -1
+		} else {
+			reset()
+		}
 	}
 
 	log.Info("Disconnecting socket")
@@ -253,6 +271,9 @@ OUTER:
 
 func main() {
 	log.SetLevel(log.DebugLevel)
+
+	// Stats listener
+	go http.ListenAndServe("0.0.0.0:34999", nil)
 
 	listener := &TcpRelay{
 		Address:           "0.0.0.0:35000",
