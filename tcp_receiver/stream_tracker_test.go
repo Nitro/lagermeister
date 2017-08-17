@@ -75,6 +75,33 @@ func Test_FindingHeaderAndMessage(t *testing.T) {
 			So(stream.FindHeader(), ShouldBeTrue)
 		})
 
+		Convey("ParseHeader() complains when things aren't ready", func() {
+			input, err := os.Open("fixtures/heka.pbuf")
+			So(err, ShouldBeNil)
+
+			stream.Read(input)
+			input.Close()
+
+			err = stream.ParseHeader()
+
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "called before")
+		})
+
+		Convey("ParseHeader() works when there is a message", func() {
+			input, err := os.Open("fixtures/heka.pbuf")
+			So(err, ShouldBeNil)
+
+			stream.Read(input)
+			input.Close()
+
+			stream.FindHeader()
+			err = stream.ParseHeader()
+			So(err, ShouldBeNil)
+
+			So(stream.header.GetMessageLength(), ShouldEqual, 281)
+		})
+
 		Convey("FindMessage() finds the message when there is one", func() {
 			input, err := os.Open("fixtures/heka.pbuf")
 			So(err, ShouldBeNil)
@@ -83,6 +110,37 @@ func Test_FindingHeaderAndMessage(t *testing.T) {
 			input.Close()
 
 			So(stream.FindMessage(), ShouldBeTrue)
+		})
+
+		Convey("ParseMessage() complains when things aren't ready", func() {
+			input, err := os.Open("fixtures/heka.pbuf")
+			So(err, ShouldBeNil)
+
+			stream.Read(input)
+			input.Close()
+
+			ok, err := stream.ParseMessage()
+
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "called before")
+			So(ok, ShouldBeFalse)
+		})
+
+		Convey("ParseMessage() parses a valid message", func() {
+			input, err := os.Open("fixtures/heka.pbuf")
+			So(err, ShouldBeNil)
+
+			stream.Read(input)
+			input.Close()
+
+			stream.FindHeader()
+			stream.ParseHeader()
+			stream.FindMessage()
+			ok, err := stream.ParseMessage()
+
+			So(err, ShouldBeNil)
+			So(ok, ShouldBeTrue)
+			So(stream.msg.Payload, ShouldNotBeNil)
 		})
 	})
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 
 	"github.com/Nitro/lagermeister/message"
@@ -104,6 +105,10 @@ func (s *StreamTracker) IsValid() bool {
 //
 // We only want to pass the Header Bytes to message.DecodeHeader.
 func (s *StreamTracker) ParseHeader() error {
+	if s.firstHeader < 0 {
+		return errors.New("ParseHeader called before FindHeader!")
+	}
+
 	headerLength := int(s.buf[s.firstHeader+1])
 	headerStart := s.firstHeader + message.HEADER_DELIMITER_SIZE
 	headerEnd := s.firstHeader + headerLength + message.HEADER_FRAMING_SIZE
@@ -124,6 +129,10 @@ func (s *StreamTracker) ParseHeader() error {
 
 // parseMessage takes a byte slice and unmarshals the Heka message it contains
 func (s *StreamTracker) ParseMessage() (ok bool, err error) {
+	if s.firstMessage < 0 {
+		return false, errors.New("ParseMessage called before FindMessage!")
+	}
+
 	messageStart := s.firstMessage + 1 // Skip the unit separator
 	messageEnd := messageStart + int(s.header.GetMessageLength())
 
