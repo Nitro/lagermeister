@@ -60,8 +60,8 @@ func Test_Read(t *testing.T) {
 	})
 }
 
-func Test_FindingHeaderAndMessage(t *testing.T) {
-	Convey("Finding the header and message in the incoming stream", t, func() {
+func Test_HeadersAndMessages(t *testing.T) {
+	Convey("Working with headers and messages in the incoming stream", t, func() {
 		pool := bpool.NewBytePool(1, 16535)
 		stream := NewStreamTracker(pool)
 
