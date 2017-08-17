@@ -33,6 +33,8 @@ type StanPublisher struct {
 	connectSem chan struct{}
 }
 
+// Connect is the main method, used to connect the StanPublisher to the
+// specified NATS stream.
 func (s *StanPublisher) Connect() error {
 	// A semaphore to make sure we don't have multiple goroutines trying
 	// to reconnect at the same time later on.
@@ -100,6 +102,9 @@ func (s *StanPublisher) BreakerOff() {
 	s.availLock.Unlock()
 }
 
+// IsAvailable is used to see if the circuit breaker has been flipped off.
+// This is used by consuming code that needs to know if the StanPublisher
+// is ready to receive a new message or not, without waiting for a timeout.
 func (s *StanPublisher) IsAvailable() bool {
 	s.availLock.RLock()
 	defer s.availLock.RUnlock()
