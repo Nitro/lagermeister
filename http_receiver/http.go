@@ -157,7 +157,7 @@ func (h *HttpRelay) readAll(r io.Reader) (b []byte, bytesRead int, err error) {
 		}
 
 		if err != nil {
-			return nil, 0, err
+			return buf, 0, err
 		}
 	}
 
