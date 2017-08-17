@@ -166,6 +166,10 @@ func (s *StreamTracker) HandleOverread() (hadOverread bool) {
 		return false
 	}
 
+	if s.expectedLen < 0 || s.readLen < 0 {
+		return false
+	}
+
 	log.Debugf("Over-read %d bytes, cycling buffer", s.readLen-s.expectedLen)
 
 	stats.Add("getPool", 1)

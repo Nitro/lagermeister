@@ -8,6 +8,10 @@ import (
 	"github.com/oxtoacart/bpool"
 )
 
+const (
+	FixtureSize = 287
+)
+
 func Test_NewStreamTracker(t *testing.T) {
 	Convey("NewStreamTracker()", t, func() {
 		pool := bpool.NewBytePool(1, 128)
@@ -76,6 +80,10 @@ func Test_HeadersAndMessages(t *testing.T) {
 			So(stream.FindHeader(), ShouldBeTrue)
 		})
 
+		Convey("FindHeader() knows when it's missing", func() {
+			So(stream.FindHeader(), ShouldBeFalse)
+		})
+
 		Convey("ParseHeader() complains when things aren't ready", func() {
 			stream.Read(input)
 			err = stream.ParseHeader()
@@ -99,6 +107,10 @@ func Test_HeadersAndMessages(t *testing.T) {
 			So(stream.FindMessage(), ShouldBeTrue)
 		})
 
+		Convey("FindMessage() knows when it's missing", func() {
+			So(stream.FindMessage(), ShouldBeFalse)
+		})
+
 		Convey("ParseMessage() complains when things aren't ready", func() {
 			stream.Read(input)
 			ok, err := stream.ParseMessage()
@@ -118,6 +130,60 @@ func Test_HeadersAndMessages(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(ok, ShouldBeTrue)
 			So(stream.msg.Payload, ShouldNotBeNil)
+		})
+
+		Convey("IsValid() correctly identifies reasonable-looking messages", func() {
+			stream.Read(input)
+			stream.FindHeader()
+			stream.ParseHeader()
+			stream.FindMessage()
+
+			So(stream.IsValid(), ShouldBeTrue)
+		})
+	})
+}
+
+func Test_HandleOverread(t *testing.T) {
+	Convey("HandleOverread()", t, func() {
+		pool := bpool.NewBytePool(1, 16535)
+		stream := NewStreamTracker(pool)
+
+		Convey("identifies when it hasn't happened", func() {
+			// There is only one record in this fixture, so can't overread
+			input, _ := os.Open("fixtures/heka.pbuf")
+			stream.Read(input)
+			input.Close()
+
+			So(stream.HandleOverread(), ShouldBeFalse)
+		})
+
+		Convey("identifies when it has happened", func() {
+			input, _ := os.Open("fixtures/heka.pbuf")
+			stream.Read(input)
+			input.Seek(0, 0) // Reset to start so we can read it again
+			stream.Read(input)
+			input.Close()
+			stream.FindHeader()
+			stream.ParseHeader()
+
+			So(stream.readLen, ShouldBeGreaterThan, FixtureSize) // More than one record was read
+			So(stream.HandleOverread(), ShouldBeTrue)
+		})
+
+		Convey("leaves the buffer with only the new record in it", func() {
+			input, _ := os.Open("fixtures/heka.pbuf")
+			stream.Read(input)
+			input.Seek(0, 0) // Reset to start so we can read it again
+			stream.Read(input)
+			input.Close()
+			stream.FindHeader()
+			stream.FindMessage()
+			stream.ParseHeader()
+			stream.ParseMessage()
+
+			So(stream.readLen, ShouldEqual, 2*FixtureSize) // We read two records
+			So(stream.HandleOverread(), ShouldBeTrue)
+			So(stream.readLen, ShouldEqual, FixtureSize)   // Only one record remains
 		})
 	})
 }
