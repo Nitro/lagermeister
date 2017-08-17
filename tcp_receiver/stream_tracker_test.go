@@ -148,21 +148,24 @@ func Test_HandleOverread(t *testing.T) {
 		pool := bpool.NewBytePool(1, 16535)
 		stream := NewStreamTracker(pool)
 
+		input, err := os.Open("fixtures/heka.pbuf")
+		So(err, ShouldBeNil)
+
+		Reset(func() {
+			input.Close()
+		})
+
 		Convey("identifies when it hasn't happened", func() {
 			// There is only one record in this fixture, so can't overread
-			input, _ := os.Open("fixtures/heka.pbuf")
 			stream.Read(input)
-			input.Close()
 
 			So(stream.HandleOverread(), ShouldBeFalse)
 		})
 
 		Convey("identifies when it has happened", func() {
-			input, _ := os.Open("fixtures/heka.pbuf")
 			stream.Read(input)
 			input.Seek(0, 0) // Reset to start so we can read it again
 			stream.Read(input)
-			input.Close()
 			stream.FindHeader()
 			stream.ParseHeader()
 
@@ -171,11 +174,9 @@ func Test_HandleOverread(t *testing.T) {
 		})
 
 		Convey("leaves the buffer with only the new record in it", func() {
-			input, _ := os.Open("fixtures/heka.pbuf")
 			stream.Read(input)
 			input.Seek(0, 0) // Reset to start so we can read it again
 			stream.Read(input)
-			input.Close()
 			stream.FindHeader()
 			stream.FindMessage()
 			stream.ParseHeader()
