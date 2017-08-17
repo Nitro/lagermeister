@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"io"
-	"net"
 
 	"github.com/Nitro/lagermeister/message"
 	log "github.com/Sirupsen/logrus"
@@ -32,7 +31,7 @@ func NewStreamTracker(pool *bpool.BytePool) *StreamTracker {
 	return stream
 }
 
-func (s *StreamTracker) Read(conn net.Conn) (keepProcessing bool, finished bool) {
+func (s *StreamTracker) Read(conn io.Reader) (keepProcessing bool, finished bool) {
 	var (
 		err    error
 		nBytes int
@@ -51,16 +50,22 @@ func (s *StreamTracker) Read(conn net.Conn) (keepProcessing bool, finished bool)
 	if err != nil && err != io.EOF {
 		log.Errorf("Unable to read from socket: %s", err)
 		// Return so we don't even try to close the socket
-		return false, true
+		keepProcessing = false
+		finished = true
+		return
 	}
 
 	// TODO move this farther down so we can complete the last message!
 	if err == io.EOF {
 		// Causes us to close the socket outside the loop
-		return false, true
+		keepProcessing = false
+		finished = true
+		return
 	}
 
-	return true, false
+	keepProcessing = true
+	finished = false
+	return
 }
 
 // FindHeaderMarker returns the first header found in the stream
@@ -190,7 +195,7 @@ func (s *StreamTracker) CleanUp() {
 }
 
 // readSocket is a light wrapper around conn.Read
-func readSocket(conn net.Conn, buf []byte) (int, error) {
+func readSocket(conn io.Reader, buf []byte) (int, error) {
 	readLen, err := conn.Read(buf)
 	if err != nil && err != io.EOF {
 		stats.Add("readError", 1)
