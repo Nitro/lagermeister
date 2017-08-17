@@ -1,2 +1,4 @@
 *.swp
 *.swo
+tcp_receiver/tcp_receiver
+http_receiver/http_receiver
