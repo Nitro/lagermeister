@@ -64,24 +64,20 @@ func Test_HeadersAndMessages(t *testing.T) {
 	Convey("Working with headers and messages in the incoming stream", t, func() {
 		pool := bpool.NewBytePool(1, 16535)
 		stream := NewStreamTracker(pool)
+		input, err := os.Open("fixtures/heka.pbuf")
+		So(err, ShouldBeNil)
+
+		Reset(func() {
+			input.Close()
+		})
 
 		Convey("FindHeader() finds the header when there is one", func() {
-			input, err := os.Open("fixtures/heka.pbuf")
-			So(err, ShouldBeNil)
-
 			stream.Read(input)
-			input.Close()
-
 			So(stream.FindHeader(), ShouldBeTrue)
 		})
 
 		Convey("ParseHeader() complains when things aren't ready", func() {
-			input, err := os.Open("fixtures/heka.pbuf")
-			So(err, ShouldBeNil)
-
 			stream.Read(input)
-			input.Close()
-
 			err = stream.ParseHeader()
 
 			So(err, ShouldNotBeNil)
@@ -89,36 +85,22 @@ func Test_HeadersAndMessages(t *testing.T) {
 		})
 
 		Convey("ParseHeader() works when there is a message", func() {
-			input, err := os.Open("fixtures/heka.pbuf")
-			So(err, ShouldBeNil)
-
 			stream.Read(input)
-			input.Close()
-
 			stream.FindHeader()
 			err = stream.ParseHeader()
-			So(err, ShouldBeNil)
 
+			So(err, ShouldBeNil)
 			So(stream.header.GetMessageLength(), ShouldEqual, 281)
 		})
 
 		Convey("FindMessage() finds the message when there is one", func() {
-			input, err := os.Open("fixtures/heka.pbuf")
-			So(err, ShouldBeNil)
-
 			stream.Read(input)
-			input.Close()
 
 			So(stream.FindMessage(), ShouldBeTrue)
 		})
 
 		Convey("ParseMessage() complains when things aren't ready", func() {
-			input, err := os.Open("fixtures/heka.pbuf")
-			So(err, ShouldBeNil)
-
 			stream.Read(input)
-			input.Close()
-
 			ok, err := stream.ParseMessage()
 
 			So(err, ShouldNotBeNil)
@@ -127,12 +109,7 @@ func Test_HeadersAndMessages(t *testing.T) {
 		})
 
 		Convey("ParseMessage() parses a valid message", func() {
-			input, err := os.Open("fixtures/heka.pbuf")
-			So(err, ShouldBeNil)
-
 			stream.Read(input)
-			input.Close()
-
 			stream.FindHeader()
 			stream.ParseHeader()
 			stream.FindMessage()

@@ -191,7 +191,7 @@ func (s *StreamTracker) GetMessage() *message.Message {
 func (s *StreamTracker) Reset() {
 	s.readLen = 0
 	s.expectedLen = -1
-	s.header = message.Header{}
+	s.header = message.Header{} // XXX this should probably be pooled...
 	s.firstHeader = -1
 	s.firstMessage = -1
 	s.foundHeader = false
