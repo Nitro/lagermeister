@@ -17,7 +17,17 @@ var (
 	publishRetries = [...]int{250, 500, 1000, 3000, 5000} // Milliseconds
 )
 
-// A StanPublisher is a NATS publisher with connection management,
+// A Publisher is an outlet for a Heka message that supports a circuit
+// breaker and connection management.
+type Publisher interface {
+	Connect() error
+	BreakerOn()
+	BreakerOff()
+	IsAvailable() bool
+	RelayMessage(*message.Message)
+}
+
+// A StanPublisher is a NATS Publisher with connection management,
 // retries, and a circuit breaker that can be flipped while a connection
 // can't be established.
 type StanPublisher struct {

@@ -34,12 +34,10 @@ type HttpRelay struct {
 
 	matcher    *message.MatcherSpecification
 	pool       *bpool.BytePool
-	connection *publisher.StanPublisher
+	connection publisher.Publisher
 }
 
-// Relay sets up the HTTP listener and the NATS client, then starts
-// handling traffic between the HTTP input and NATS output.
-func (h *HttpRelay) Relay() error {
+func (h *HttpRelay) init() error {
 	var err error
 
 	if len(h.MatchSpec) > 0 {
@@ -51,12 +49,25 @@ func (h *HttpRelay) Relay() error {
 
 	h.pool = bpool.NewBytePool(DefaultPoolSize, DefaultPoolMemberSize)
 
-	h.connection = &publisher.StanPublisher{
-		NatsUrl:   h.NatsUrl,
-		ClusterId: h.ClusterId,
-		ClientId:  h.ClientId,
-		Subject:   h.Subject,
-		Stats:     stats,
+	if h.connection == nil { // We can provide our own (e.g. as a mock)
+		h.connection = &publisher.StanPublisher{
+			NatsUrl:   h.NatsUrl,
+			ClusterId: h.ClusterId,
+			ClientId:  h.ClientId,
+			Subject:   h.Subject,
+			Stats:     stats,
+		}
+	}
+
+	return nil
+}
+
+// Relay sets up the HTTP listener and the NATS client, then starts
+// handling traffic between the HTTP input and NATS output.
+func (h *HttpRelay) Relay() error {
+	err := h.init()
+	if err != nil {
+		return fmt.Errorf("Unable to initialize relay: %s", err)
 	}
 
 	http.HandleFunc("/", h.handleReceive)
@@ -74,7 +85,7 @@ func (h *HttpRelay) Relay() error {
 // the message broker for further processing.
 func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
-	data, bytesRead, err := h.readAll(req.Body)
+	data, bytesRead, err := h.readAll(req.Body) // data is a pooled buffer!
 
 	// Make sure we put the buffer we got from readAll back in the pool!
 	defer func() {
@@ -84,6 +95,14 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 
 	stats.Add("receivedCount", 1)
 	response.Header().Set("Content-Type", "application/json")
+
+	if err != nil { // this is from readAll above
+		stats.Add("errorCount", 1)
+		// If we have a socket error this may not get sent... but we'll try
+		http.Error(response, `{"status": "error", "message": "Socket read error"}`, 500)
+		log.Errorf("Reading from socket: %s", err)
+		return
+	}
 
 	// See if the circuit breaker is flipped on, push back to clients
 	// instead of attempting to queue and then dropping the message.
@@ -99,15 +118,16 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 		}
 	}
 
-	if err != nil {
-		stats.Add("errorCount", 1)
-		log.Error(err)
-	}
-
 	var msg message.Message
 	// Using a length limit is important here! Otherwise msg will include
 	// all the null chars at the end of the byte slice.
-	proto.Unmarshal(data[:bytesRead], &msg)
+	err = proto.Unmarshal(data[:bytesRead], &msg)
+	if err != nil { // this is from readAll above
+		stats.Add("errorCount", 1)
+		http.Error(response, `{"status": "error", "message": "Invalid message sent"}`, 400)
+		log.Errorf("Unmarshaling protobuf: %s", err)
+		return
+	}
 
 	if (msg.Payload == nil && len(msg.Fields) == 0) || msg.Hostname == nil {
 		log.Warnf("Missing fields! %s", msg.String())
