@@ -3,6 +3,7 @@ package main
 import (
 	"expvar"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -38,12 +39,13 @@ type TcpRelay struct {
 	KeepAlive         bool
 	KeepAliveDuration time.Duration
 
-	pool              *bpool.BytePool
-	matcher           *message.MatcherSpecification
-	connection *publisher.StanPublisher
+	pool        *bpool.BytePool
+	matcher     *message.MatcherSpecification
+	connection  publisher.Publisher
+	initialized bool
 }
 
-func (t *TcpRelay) Listen() error {
+func (t *TcpRelay) init() error {
 	t.pool = bpool.NewBytePool(DefaultPoolSize, DefaultPoolMemberSize)
 	// Set up the publisher, passing along the configuration
 	t.connection = &publisher.StanPublisher{
@@ -56,6 +58,19 @@ func (t *TcpRelay) Listen() error {
 	err := t.connection.Connect()
 	if err != nil {
 		return fmt.Errorf("Error starting NATS connection: %s", err)
+	}
+
+	t.initialized = true
+
+	return nil
+}
+
+func (t *TcpRelay) Listen() error {
+	if !t.initialized {
+		err := t.init()
+		if err != nil {
+			return err
+		}
 	}
 
 	listener, err := net.Listen("tcp", t.Address)
@@ -101,7 +116,7 @@ func (t *TcpRelay) Listen() error {
 
 // handleConnection handles the main work of the program, processing the
 // incoming data stream.
-func (t *TcpRelay) handleConnection(conn net.Conn) {
+func (t *TcpRelay) handleConnection(conn io.ReadCloser) {
 
 	stats.Add("connectCount", 1)
 	stream := NewStreamTracker(t.pool) // Allocate a StreamTracker and get buffer from pool

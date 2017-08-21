@@ -9,36 +9,10 @@ import (
 	"testing"
 
 	"github.com/Nitro/lagermeister/message"
+	"github.com/Nitro/lagermeister/publisher"
 	log "github.com/Sirupsen/logrus"
 	. "github.com/SmartyStreets/goconvey/convey"
 )
-
-type MockPublisher struct {
-	available        bool
-	connectWasCalled bool
-	lastMsg          *message.Message
-}
-
-func (m *MockPublisher) Connect() error {
-	m.connectWasCalled = true
-	return nil
-}
-
-func (m *MockPublisher) BreakerOn() {
-	m.available = false
-}
-
-func (m *MockPublisher) BreakerOff() {
-	m.available = true
-}
-
-func (m *MockPublisher) IsAvailable() bool {
-	return m.available
-}
-
-func (m *MockPublisher) RelayMessage(msg *message.Message) {
-	m.lastMsg = msg
-}
 
 func Test_HealthCheck(t *testing.T) {
 	log.SetLevel(log.FatalLevel)
@@ -87,7 +61,7 @@ func Test_HandleReceive(t *testing.T) {
 		req := httptest.NewRequest("POST", "http://chaucer.example.com/health", nil)
 		w := httptest.NewRecorder()
 
-		mockConnection := &MockPublisher{available: true}
+		mockConnection := &publisher.MockPublisher{Available: true}
 		relay := &HttpRelay{connection: mockConnection}
 		relay.init()
 
@@ -96,7 +70,7 @@ func Test_HandleReceive(t *testing.T) {
 		})
 
 		Convey("returns an error when the breaker is on", func() {
-			mockConnection.available = false
+			mockConnection.Available = false
 			relay.handleReceive(w, req)
 
 			resp := w.Result()
@@ -108,10 +82,10 @@ func Test_HandleReceive(t *testing.T) {
 		})
 
 		Convey("tries to reconnect when the breaker is on", func() {
-			mockConnection.available = false
+			mockConnection.Available = false
 			relay.handleReceive(w, req)
 
-			So(mockConnection.connectWasCalled, ShouldBeTrue)
+			So(mockConnection.ConnectWasCalled, ShouldBeTrue)
 		})
 
 		Convey("captures errors when the socket has errors", func() {
@@ -164,8 +138,8 @@ func Test_HandleReceive(t *testing.T) {
 			So(resp.StatusCode, ShouldEqual, 200)
 			So(string(body), ShouldBeEmpty)
 			So(stats.Get("skipped"), ShouldBeNil)
-			So(mockConnection.lastMsg, ShouldNotBeNil)
-			So(*mockConnection.lastMsg.Hostname, ShouldEqual, "ubuntu")
+			So(mockConnection.LastMsg, ShouldNotBeNil)
+			So(*mockConnection.LastMsg.Hostname, ShouldEqual, "ubuntu")
 		})
 
 		Convey("relays messages that match the matcher", func() {
@@ -181,8 +155,8 @@ func Test_HandleReceive(t *testing.T) {
 
 			So(resp.StatusCode, ShouldEqual, 200)
 			So(string(body), ShouldBeEmpty)
-			So(mockConnection.lastMsg, ShouldNotBeNil)
-			So(*mockConnection.lastMsg.Hostname, ShouldEqual, "ubuntu")
+			So(mockConnection.LastMsg, ShouldNotBeNil)
+			So(*mockConnection.LastMsg.Hostname, ShouldEqual, "ubuntu")
 		})
 
 		Convey("does not relay non-matching messages", func() {
@@ -200,7 +174,7 @@ func Test_HandleReceive(t *testing.T) {
 
 			So(resp.StatusCode, ShouldEqual, 200)
 			So(string(body), ShouldBeEmpty)
-			So(mockConnection.lastMsg, ShouldBeNil)
+			So(mockConnection.LastMsg, ShouldBeNil)
 		})
 	})
 }
