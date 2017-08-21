@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Nitro/lagermeister/message"
+	log "github.com/Sirupsen/logrus"
 	. "github.com/SmartyStreets/goconvey/convey"
 )
 
@@ -37,6 +38,8 @@ func (m *MockPublisher) RelayMessage(*message.Message) {
 }
 
 func Test_HealthCheck(t *testing.T) {
+	log.SetLevel(log.FatalLevel)
+
 	Convey("The health check", t, func() {
 		req := httptest.NewRequest("GET", "http://chaucer.example.com/health", nil)
 		w := httptest.NewRecorder()
