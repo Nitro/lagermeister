@@ -135,14 +135,13 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	if msg.Payload == nil || msg.Hostname == nil {
-		log.Debugf("Missing fields: %s\n", msg.Fields)
-	} else {
-		log.Debugf("Hostname: %s Payload: %#v\n", *msg.Hostname, *msg.Payload)
-	}
+	log.Debugf("Hostname: %s Payload: %#v\n", *msg.Hostname, *msg.Payload)
+
 	if h.matcher == nil || h.matcher.Match(&msg) {
 		h.connection.RelayMessage(&msg)
 	}
+
+	// In the acceptable case we don't reply with anything but a 200 OK status
 }
 
 func (h *HttpRelay) handleHealth(response http.ResponseWriter, req *http.Request) {
