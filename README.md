@@ -1,13 +1,21 @@
 Lägermeister
 ============
 
-A Heka message compatible logging forwarder backed by NATS. This serves as a
-centralized log forwarder so that clients can have a local relay that will
-accept large volumes of logs and which is capable of batching them into groups
-and forwarding to a logging system like Sumologic.
+Lägermeister is a Heka message compatible logging forwarder backed by NATS.
+This serves as a centralized log forwarder so that clients can have a local
+relay that will accept large volumes of logs and which is capable of batching
+them into groups and forwarding to a logging system like Sumologic.
 
-It uses NATS-streaming to act as the main message buffer and is comprised of
-three main parts:
+It is comprised of a number of smaller programs that are all tied together
+around a shared message broker. Each program has its own configuration and runs
+in its own process space. The message broker interface is the way that
+components talk to each other and it also acts as a buffer between components
+of the system. In this way temporary burst load can be absorbed by the broker
+and components can be scaled up and down individually based on the needs of the
+pipeline they serve.
+
+Lägermeister uses NATS-streaming as the message broker. The system is comprised
+of three main parts:
 
 1. **Message receiver**: There are two implementations of the message receiver:
    an HTTP receiver and a TCP streaming receiver that processes HekaFraming
@@ -31,7 +39,7 @@ three main parts:
    the performance of the system in question. More than one subscriber can be
    run from the same log subject as long as they are in the same subscriber group.
    In this way NATS-Streaming can load balance the subscribers.
-   **location**: `subscriber/`
+   **location**: `http_subscriber/`
 
 Configuration
 -------------
