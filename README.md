@@ -24,7 +24,7 @@ of three main parts:
    be able to handle substantially more, though with a much larger network
    footprint. Each streaming receiver should be able to handle thousands of
    open connections.
-   **location**: `http_recevier/`, `tcp_receiver`
+   **location**: `http_recevier/`, `tcp_receiver/`
 
 2. **NATS-Streaming Server**: Acts as a centralized buffer and subscription
    manager for log consumers. It will guarantee at-least-once delivery for each
