@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/ioutil"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/Nitro/lagermeister/message"
@@ -15,6 +16,7 @@ import (
 type MockPublisher struct {
 	available        bool
 	connectWasCalled bool
+	lastMsg          *message.Message
 }
 
 func (m *MockPublisher) Connect() error {
@@ -34,7 +36,8 @@ func (m *MockPublisher) IsAvailable() bool {
 	return m.available
 }
 
-func (m *MockPublisher) RelayMessage(*message.Message) {
+func (m *MockPublisher) RelayMessage(msg *message.Message) {
+	m.lastMsg = msg
 }
 
 func Test_HealthCheck(t *testing.T) {
@@ -132,6 +135,7 @@ func Test_HandleReceive(t *testing.T) {
 
 			So(resp.StatusCode, ShouldEqual, 400)
 			So(string(body), ShouldContainSubstring, "Invalid message")
+			So(stats.Get("errorCount"), ShouldNotBeNil)
 			So(stats.Get("errorCount").String(), ShouldEqual, "1")
 		})
 
@@ -145,7 +149,56 @@ func Test_HandleReceive(t *testing.T) {
 
 			So(resp.StatusCode, ShouldEqual, 200)
 			So(string(body), ShouldBeEmpty)
+			So(stats.Get("skipped"), ShouldNotBeNil)
 			So(stats.Get("skipped").String(), ShouldEqual, "1")
+		})
+
+		Convey("relays all messages when the matcher is empty", func() {
+			file, _ := os.Open("fixtures/heka.pbuf")
+			req := httptest.NewRequest("POST", "http://chaucer.example.com/health", file)
+			relay.handleReceive(w, req)
+
+			resp := w.Result()
+			body, _ := ioutil.ReadAll(resp.Body)
+
+			So(resp.StatusCode, ShouldEqual, 200)
+			So(string(body), ShouldBeEmpty)
+			So(stats.Get("skipped"), ShouldBeNil)
+			So(mockConnection.lastMsg, ShouldNotBeNil)
+			So(*mockConnection.lastMsg.Hostname, ShouldEqual, "ubuntu")
+		})
+
+		Convey("relays messages that match the matcher", func() {
+			file, _ := os.Open("fixtures/heka.pbuf")
+			req := httptest.NewRequest("POST", "http://chaucer.example.com/health", file)
+			var err error
+			relay.matcher, err = message.CreateMatcherSpecification("Hostname == 'ubuntu'")
+			So(err, ShouldBeNil)
+			relay.handleReceive(w, req)
+
+			resp := w.Result()
+			body, _ := ioutil.ReadAll(resp.Body)
+
+			So(resp.StatusCode, ShouldEqual, 200)
+			So(string(body), ShouldBeEmpty)
+			So(mockConnection.lastMsg, ShouldNotBeNil)
+			So(*mockConnection.lastMsg.Hostname, ShouldEqual, "ubuntu")
+		})
+
+		Convey("does not relay non-matching messages", func() {
+			file, _ := os.Open("fixtures/heka.pbuf")
+			req := httptest.NewRequest("POST", "http://chaucer.example.com/health", file)
+			var err error
+			relay.matcher, err = message.CreateMatcherSpecification("Hostname == 'something-else'")
+			So(err, ShouldBeNil)
+			relay.handleReceive(w, req)
+
+			resp := w.Result()
+			body, _ := ioutil.ReadAll(resp.Body)
+
+			So(resp.StatusCode, ShouldEqual, 200)
+			So(string(body), ShouldBeEmpty)
+			So(mockConnection.lastMsg, ShouldBeNil)
 		})
 	})
 }
