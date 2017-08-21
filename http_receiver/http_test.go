@@ -186,10 +186,12 @@ func Test_HandleReceive(t *testing.T) {
 		})
 
 		Convey("does not relay non-matching messages", func() {
+			relay.MatchSpec = "Hostname == 'something-else'"
+			relay.init()
+
 			file, _ := os.Open("fixtures/heka.pbuf")
 			req := httptest.NewRequest("POST", "http://chaucer.example.com/health", file)
 			var err error
-			relay.matcher, err = message.CreateMatcherSpecification("Hostname == 'something-else'")
 			So(err, ShouldBeNil)
 			relay.handleReceive(w, req)
 
