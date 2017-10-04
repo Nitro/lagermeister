@@ -1,4 +1,5 @@
-import { Component, OnInit, ViewEncapsulation } from '@angular/core';
+import { Component, ViewEncapsulation, ChangeDetectorRef } from '@angular/core';
+import { Http, Response } from '@angular/http';
 import * as _ from "lodash";
 
 @Component({
@@ -7,6 +8,7 @@ import * as _ from "lodash";
   styleUrls: ['../../node_modules/nvd3/build/nv.d3.css'],
   encapsulation: ViewEncapsulation.None
 })
+
 export class AppComponent {
   title = 'Working!';
   exampleSocket: any;
@@ -14,7 +16,9 @@ export class AppComponent {
   data: any;
   options: any;
   pendingData: Array<any> = [];
+  pendingThroughput: Array<any> = [];
   lastSeenValues: Object;
+  chartConfig: any;
 
   allCharts: {
     BatchSize: {
@@ -39,7 +43,6 @@ export class AppComponent {
       chart: Object;
       domElement: string;
       columns: string[][];
-      thresholds: Object;
       chartType: string;
     },
     Throughput: {
@@ -49,23 +52,27 @@ export class AppComponent {
       domElement: string;
       columns: string[][];
       chartType: string;
-    },
-    LastSeen: {
-      data: Object;
-      options: Object;
-      chart: Object;
-      domElement: string;
-      columns: string[][];
-      chartType: string;
-    },
+    }
   };
 
-    constructor() {
+    constructor(private ref: ChangeDetectorRef,
+                private http: Http) {
+
+      this.http.get(`http://localhost:9010/config`)
+        .subscribe( (resp: any) => {
+          this.chartConfig = JSON.parse(resp.text());
+          console.log('chart config', this.chartConfig);
+          this.setupChartData();
+        });
+    }
+
+
+    setupChartData() {
       let lineChartOptions: Object = {
         isStacked: true,
         legend: 'top',
         chartArea: {top: 30, left: 100},
-        width: 2000,
+        width: '100%',
         height: 500,
         curveType: 'function',
         hAxis: {
@@ -78,13 +85,6 @@ export class AppComponent {
             min: 0
           }
         }
-      };
-
-      let tableOptions: Object = {
-        legend: 'top',
-        chartArea: {top: 30, left: 100},
-        width: 300,
-        height: 300,
       };
 
       let gaugeChartOptions: Object = {
@@ -130,7 +130,6 @@ export class AppComponent {
           chart: null,
           domElement: 'lag-gauge',
           columns: [['Label', 'string'], ['Lag (secs)', 'number']],
-          thresholds: {},
           options: Object.assign({
             vAxis: {
               title: 'BatchSize',
@@ -143,7 +142,7 @@ export class AppComponent {
           data: {},
           chart: null,
           domElement: 'throughput-chart',
-          columns: [['Timestamp', 'datetime'], ['HTTP Rcvr', 'number'], ['TCP Rcvr', 'number']],
+          columns: [['Timestamp', 'datetime']].concat(_.map(this.chartConfig.Throughput, (k: string, v: string) => { return [v, 'number']; })),
           options: Object.assign({
             vAxis: {
               title: 'Throughput (rps)',
@@ -153,27 +152,17 @@ export class AppComponent {
             },
             colors: this.getRandomColor(),
           }, lineChartOptions)
-        },
-        LastSeen: {
-          chartType: 'Table',
-          data: {},
-          chart: null,
-          domElement: 'last-seen-table',
-          columns: [['Sender'], ['Timestamp']],
-          options: Object.assign({
-            vAxis: {
-              title: 'Last Message Received',
-            },
-          }, tableOptions)
         }
       };
+
+      // console.log('chart data', this.allCharts);
 
       this.lastSeenValues = {};
 
       let script = document.createElement('script');
       script.src = '//www.google.com/jsapi';
       script.onload = () => {
-        (<any>window).google.load('visualization', '1', {'callback': this.drawChart.bind(this), 'packages':['corechart', 'gauge', 'table']});
+        (<any>window).google.load('visualization', '1', {'callback': this.drawChart.bind(this), 'packages':['corechart', 'gauge']});
       };
 
       document.head.appendChild(script); //or something of the like
@@ -191,12 +180,9 @@ export class AppComponent {
           case 'Gauge':
             chart = new (<any>window).google.visualization.Gauge(document.getElementsByClassName(this.allCharts[i].domElement)[0]);
             break;
-          case 'Table':
-            chart = new (<any>window).google.visualization.Table(document.getElementsByClassName(this.allCharts[i].domElement)[0]);
-            break;
         }
 
-        this.allCharts[i].columns.forEach( (col: Array<string>) => {
+        this.allCharts[i].columns.forEach((col:Array<string>) => {
           this.allCharts[i].data.addColumn(col[1], col[0]);
         });
 
@@ -215,7 +201,7 @@ export class AppComponent {
 
 
     updateChartData(data: any) {
-      // this.updateLastSeenTable(data);
+      this.updateLastSeenTable(data);
       switch (data.MetricType) {
         case 'Lag':
           this.updateLineChart(this.allCharts[data.MetricType], data);
@@ -227,22 +213,14 @@ export class AppComponent {
     }
 
     updateLastSeenTable(data: any) {
+      let newValues = {};
+      newValues[data.Sender] = new Date(data.Timestamp*1000);
+      Object.assign(this.lastSeenValues, newValues);
+      this.ref.detectChanges();
+    }
 
-      console.log(data);
-      // this.lastSeenValues[data.Sender] = data.Timestamp;
-      //
-      // let columns = this.allCharts.LastSeen.columns;
-      // let fields = [columns[0][0], columns[1][0]];
-      // console.log('Fields', fields);
-      // for(let i in this.lastSeenValues) {
-      //   fields.push(i, this.lastSeenValues[i])
-      // }
-      //
-      // let chart = this.allCharts.LastSeen;
-      // chart.data = new (<any>window).google.visualization.arrayToDataTable(fields, false);
-      // this.lastSeenValues = {};
-      // console.log(chart);
-      // chart.chart.draw(chart.data, chart.options);
+    get getLastSeenKeys() {
+      return _.keys(this.lastSeenValues);
     }
 
     updateLineChart(chart: any, data: any) {
@@ -283,40 +261,55 @@ export class AppComponent {
     createWebsocketConnection() {
       this.exampleSocket = new WebSocket("ws://localhost:9010/messages");
       this.exampleSocket.onmessage = (event:any) => {
-        let data = this.aggregateData(JSON.parse(event.data));
-        this.pendingData.push(data);
+          this.aggregateData(JSON.parse(event.data));
       };
 
       setInterval(() => {
-        this.pendingData.forEach((data) => {
+        // this.pendingData.forEach((data) => {
+        //   this.updateChartData(data);
+        // });
+        this.pendingThroughput.forEach((data) => {
+          // console.log(data);
           this.updateChartData(data);
         });
-        this.pendingData.splice(0);
+        // this.pendingData.splice(0);
+        this.pendingThroughput.splice(0);
       }, 1000)
     }
 
     aggregateData(data: any) {
+
       switch (data.MetricType) {
         case 'Throughput':
-          let throughputEvts = _.filter(this.pendingData, (evt: any) => {
-            return evt.MetricType === 'Throughput' && (evt.Timestamp >= data.Timestamp - 1000)
+          this.pendingThroughput.push(data);
+          let grouped = _.groupBy(this.pendingThroughput, (evt: any) => {
+            return evt.Timestamp
+          });
+           // console.log('grouped:', grouped);
+
+          let combined: Array<any> = [];
+          _.forEach(grouped, (items: any, time: any) => {
+              let combinedItem = {
+                Values: {}
+              };
+              _.forEach(items, (item: any) => {
+                Object.assign(combinedItem, item);
+                combinedItem.Values[item.Sender] = item.Value;
+              });
+
+              // Make sure we have all the columns defined or the chart goes ape
+              _.forEach(this.chartConfig.Throughput, (val: any, key: any) => {
+                combinedItem.Values[key] = combinedItem.Values[key] ? combinedItem.Values[key] : 0;
+              });
+              // console.log(combinedItem);
+
+              combined.push(combinedItem);
           });
 
-          data.Values = {};
-          data.Values[data.Sender] = data.Value;
-
-          data = _.reduce(throughputEvts, (memo: any, evt: any) => {
-            memo.Values[evt.Sender] = evt.Value;
-            return memo
-          }, data);
-
-          this.pendingData = _.filter(this. pendingData, (evt: any) => {
-            return evt.MetricType !== 'Throughput' && (evt.Timestamp >= data.Timestamp - 1000)
-          });
-
-          return data;
+          this.pendingThroughput = combined;
+          break;
         default:
-          return data;
+          this.pendingData.push(data);
       }
     }
 

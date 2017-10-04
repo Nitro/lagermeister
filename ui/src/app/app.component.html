@@ -1,6 +1,16 @@
 <h1>
-  {{title}}
-  <button  (click)="testFn('test')">Test</button>
+  <!--{{title}}-->
+  <!--<button  (click)="testFn('test')">Test</button>-->
+  <div>
+    <dl *ngFor='let key of getLastSeenKeys'>
+      <dt>{{key}}</dt>
+      <dd>{{lastSeenValues[key]}}</dd>
+    </dl>
+  </div>
+
+
+
+
   <div class="last-seen-table"></div>
   <div class="throughput-chart"></div>
   <div class="batch-size-chart"></div>
