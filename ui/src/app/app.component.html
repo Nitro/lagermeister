@@ -1,19 +1,53 @@
-<h1>
-  <!--{{title}}-->
-  <!--<button  (click)="testFn('test')">Test</button>-->
-  <div>
-    <dl *ngFor='let key of getLastSeenKeys'>
-      <dt>{{key}}</dt>
-      <dd>{{lastSeenValues[key]}}</dd>
-    </dl>
+<div class="main-container">
+  <div class="content-container">
+
+    <div class="header">
+      <img class="logo-img" src="assets/logo3.png">
+    </div>
+
+    <div class="chart-container">
+      <div class="title-container">
+        <span class="title">Lag Metrics</span>
+      </div>
+
+      <div class="lag-container">
+        <div class="lag-chart chart"></div>
+        <div class="lag-gauge chart"></div>
+      </div>
+    </div>
+
+    <div class="chart-container">
+      <div class="title-container">
+        <span class="title">Throughput Metrics</span>
+      </div>
+      <div class="throughput-chart chart"></div>
+    </div>
+
+    <div class="chart-container">
+      <div class="title-container">
+        <span class="title">Batch Size Metrics</span>
+      </div>
+      <div class="batch-size-chart chart"></div>
+    </div>
+
+    <div class="table-container">
+      <table class="table">
+        <thead>
+        <tr>
+          <th>Event Sender</th>
+          <th>Last Received Message</th>
+        </tr>
+        </thead>
+
+        <tbody>
+        <tr *ngFor='let key of getLastSeenKeys'>
+          <td>{{key}}</td>
+          <td>{{lastSeenValues[key]}}</td>
+        </tr>
+        </tbody>
+      </table>
+    </div>
+
   </div>
+</div>
 
-
-
-
-  <div class="last-seen-table"></div>
-  <div class="throughput-chart"></div>
-  <div class="batch-size-chart"></div>
-  <div class="lag-chart"></div>
-  <div class="lag-gauge"></div>
-</h1>

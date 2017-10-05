@@ -1,20 +1,16 @@
 import { Component, ViewEncapsulation, ChangeDetectorRef } from '@angular/core';
-import { Http, Response } from '@angular/http';
+import { Http } from '@angular/http';
 import * as _ from "lodash";
 
 @Component({
   selector: 'app-root',
   templateUrl: './app.component.html',
-  styleUrls: ['../../node_modules/nvd3/build/nv.d3.css'],
+  styleUrls: ['./app.component.scss'],
   encapsulation: ViewEncapsulation.None
 })
 
 export class AppComponent {
-  title = 'Working!';
   exampleSocket: any;
-  chart: any;
-  data: any;
-  options: any;
   pendingData: Array<any> = [];
   pendingThroughput: Array<any> = [];
   lastSeenValues: Object;
@@ -57,11 +53,11 @@ export class AppComponent {
 
     constructor(private ref: ChangeDetectorRef,
                 private http: Http) {
-
+      // Fetch the chart config and begin setting up the chart objects
       this.http.get(`http://localhost:9010/config`)
+      // this.http.get(`http://10.40.21.28:9010/config`)
         .subscribe( (resp: any) => {
           this.chartConfig = JSON.parse(resp.text());
-          console.log('chart config', this.chartConfig);
           this.setupChartData();
         });
     }
@@ -71,9 +67,8 @@ export class AppComponent {
       let lineChartOptions: Object = {
         isStacked: true,
         legend: 'top',
-        chartArea: {top: 30, left: 100},
-        width: '100%',
-        height: 500,
+        chartArea: {top: 30, left: 100, right: 120},
+        height: 250,
         curveType: 'function',
         hAxis: {
           gridLines: {color: '#333'},
@@ -87,13 +82,6 @@ export class AppComponent {
         }
       };
 
-      let gaugeChartOptions: Object = {
-        legend: 'top',
-        chartArea: {top: 30, left: 100},
-        width: 300,
-        height: 300,
-      };
-
       this.allCharts = {
         BatchSize: {
           chartType: 'LineChart',
@@ -102,10 +90,11 @@ export class AppComponent {
           domElement: 'batch-size-chart',
           columns: [['Timestamp', 'datetime'], ['Batch Size', 'number']],
           options: Object.assign({
+            width: '100%',
             vAxis: {
               title: 'BatchSize',
             },
-            colors: this.getRandomColor(),
+            colors: ['#4CAF50'],
           }, lineChartOptions)
         },
         Lag: {
@@ -115,13 +104,14 @@ export class AppComponent {
           domElement: 'lag-chart',
           columns: [['Timestamp', 'datetime'], ['Lag (secs)', 'number']],
           options: Object.assign({
+            width: 1000,
             vAxis: {
               title: 'Lag (secs)',
             },
             hAxis: {
               viewWindow: {}
             },
-            colors: this.getRandomColor(),
+            colors: ['#E24500'],
           }, lineChartOptions)
         },
         LagGauge: {
@@ -130,12 +120,16 @@ export class AppComponent {
           chart: null,
           domElement: 'lag-gauge',
           columns: [['Label', 'string'], ['Lag (secs)', 'number']],
-          options: Object.assign({
+          options: {
+            width: 200,
+            height: 200,
             vAxis: {
               title: 'BatchSize',
             },
-            colors: this.getRandomColor(),
-          }, gaugeChartOptions)
+            colors: [],
+            legend: 'top',
+            chartArea: {top: 30, left: 0, right: 100},
+          }
         },
         Throughput: {
           chartType: 'LineChart',
@@ -150,27 +144,25 @@ export class AppComponent {
             hAxis: {
               viewWindow: {}
             },
-            colors: this.getRandomColor(),
+            colors: ['#FFC000', '#208DB9'],
           }, lineChartOptions)
         }
       };
 
-      // console.log('chart data', this.allCharts);
-
       this.lastSeenValues = {};
 
+      // Load the google charts lib, then begin drawing the charts
       let script = document.createElement('script');
       script.src = '//www.google.com/jsapi';
       script.onload = () => {
         (<any>window).google.load('visualization', '1', {'callback': this.drawChart.bind(this), 'packages':['corechart', 'gauge']});
       };
-
-      document.head.appendChild(script); //or something of the like
+      document.head.appendChild(script);
     }
 
     drawChart() {
       for(let i in this.allCharts) {
-
+        // Add a google data table and chart to each chart object
         this.allCharts[i].data = new (<any>window).google.visualization.DataTable();
         let chart;
         switch (this.allCharts[i].chartType) {
@@ -182,6 +174,7 @@ export class AppComponent {
             break;
         }
 
+        // Setup the columns for each chart
         this.allCharts[i].columns.forEach((col:Array<string>) => {
           this.allCharts[i].data.addColumn(col[1], col[0]);
         });
@@ -199,6 +192,60 @@ export class AppComponent {
       this.createWebsocketConnection();
     }
 
+    createWebsocketConnection() {
+      // Create a connection to listen for incoming data
+      this.exampleSocket = new WebSocket("ws://localhost:9010/messages");
+      // this.exampleSocket = new WebSocket("ws://10.40.21.28:9010/messages");
+      this.exampleSocket.onmessage = (event:any) => {
+        this.aggregateData(JSON.parse(event.data));
+      };
+
+      // Push new data to the charts every second
+      setInterval(() => {
+        this.pendingData.forEach((data) => {
+          this.updateChartData(data);
+        });
+        this.pendingThroughput.forEach((data) => {
+          this.updateChartData(data);
+        });
+        this.pendingData.splice(0);
+        this.pendingThroughput.splice(0);
+      }, 1000)
+    }
+
+    aggregateData(data: any) {
+      switch (data.MetricType) {
+        case 'Throughput':
+
+          this.pendingThroughput.push(data);
+          let grouped = _.groupBy(this.pendingThroughput, (evt: any) => {
+            return evt.Timestamp
+          });
+
+          let combined: Array<any> = [];
+          _.forEach(grouped, (items: any, time: any) => {
+            let combinedItem = {
+              Values: {}
+            };
+
+            _.forEach(items, (item: any) => {
+              Object.assign(combinedItem, item);
+              combinedItem.Values[item.Sender] = item.Value;
+            });
+
+            // Make sure we have all the columns defined or the chart goes ape
+            _.forEach(this.chartConfig.Throughput, (val: any, key: any) => {
+              combinedItem.Values[key] = combinedItem.Values[key] ? combinedItem.Values[key] : 0;
+            });
+
+            combined.push(combinedItem);
+          });
+          this.pendingThroughput = combined;
+          break;
+        default:
+          this.pendingData.push(data);
+      }
+    }
 
     updateChartData(data: any) {
       this.updateLastSeenTable(data);
@@ -207,6 +254,7 @@ export class AppComponent {
           this.updateLineChart(this.allCharts[data.MetricType], data);
           this.updateGauge(this.allCharts['LagGauge'], data);
           break;
+
         default:
           this.updateLineChart(this.allCharts[data.MetricType], data);
       }
@@ -214,31 +262,31 @@ export class AppComponent {
 
     updateLastSeenTable(data: any) {
       let newValues = {};
-      newValues[data.Sender] = new Date(data.Timestamp*1000);
+      newValues[data.Sender + " (" + data.SourceIP + ")"] = new Date(data.Timestamp * 1000);
       Object.assign(this.lastSeenValues, newValues);
+      // Lets angular know there are new changes to update the UI
       this.ref.detectChanges();
-    }
-
-    get getLastSeenKeys() {
-      return _.keys(this.lastSeenValues);
     }
 
     updateLineChart(chart: any, data: any) {
       let date = new Date(data.Timestamp * 1000);
       let min = new Date((data.Timestamp-60) * 1000);
+
+      // Moves the viewWindow to give us the effect that the chart is scrolling
       chart.options.hAxis.viewWindow.min = min;
       chart.options.hAxis.viewWindow.max = date;
 
-      if (!_.isNil(data.Values)) {
+      if (!_.isNil(data.Values)) { // Draw multiple lines
         let fields = [date];
         for (let i in data.Values) {
           fields.push(data.Values[i])
         }
         chart.data.addRow(fields);
-      } else {
+      } else { // Draw single line
         chart.data.addRow([date, data.Value]);
       }
       chart.chart.draw(chart.data, chart.options);
+      this.removeHiddenRow(chart);
     }
 
     updateGauge(chart: any, data: any) {
@@ -256,65 +304,17 @@ export class AppComponent {
       chart.data.setValue(0, 0, data.MetricType);
       chart.data.setValue(0, 1, data.Value);
       chart.chart.draw(chart.data,  Object.assign(chart.options, extraOptions));
+      this.removeHiddenRow(chart);
     }
 
-    createWebsocketConnection() {
-      this.exampleSocket = new WebSocket("ws://localhost:9010/messages");
-      this.exampleSocket.onmessage = (event:any) => {
-          this.aggregateData(JSON.parse(event.data));
-      };
-
-      setInterval(() => {
-        // this.pendingData.forEach((data) => {
-        //   this.updateChartData(data);
-        // });
-        this.pendingThroughput.forEach((data) => {
-          // console.log(data);
-          this.updateChartData(data);
-        });
-        // this.pendingData.splice(0);
-        this.pendingThroughput.splice(0);
-      }, 1000)
-    }
-
-    aggregateData(data: any) {
-
-      switch (data.MetricType) {
-        case 'Throughput':
-          this.pendingThroughput.push(data);
-          let grouped = _.groupBy(this.pendingThroughput, (evt: any) => {
-            return evt.Timestamp
-          });
-           // console.log('grouped:', grouped);
-
-          let combined: Array<any> = [];
-          _.forEach(grouped, (items: any, time: any) => {
-              let combinedItem = {
-                Values: {}
-              };
-              _.forEach(items, (item: any) => {
-                Object.assign(combinedItem, item);
-                combinedItem.Values[item.Sender] = item.Value;
-              });
-
-              // Make sure we have all the columns defined or the chart goes ape
-              _.forEach(this.chartConfig.Throughput, (val: any, key: any) => {
-                combinedItem.Values[key] = combinedItem.Values[key] ? combinedItem.Values[key] : 0;
-              });
-              // console.log(combinedItem);
-
-              combined.push(combinedItem);
-          });
-
-          this.pendingThroughput = combined;
-          break;
-        default:
-          this.pendingData.push(data);
+    removeHiddenRow(chart: any) {
+      if (chart.data.getNumberOfRows() > 100) {
+        chart.data.removeRow(0)
       }
     }
 
-    getRandomColor() {
-      return _.shuffle(['D6532A', '208DB9', '4CAF50', '009688', '01A04B', 'FFC000']);
+    get getLastSeenKeys() {
+      return _.keys(this.lastSeenValues);
     }
 
 }
