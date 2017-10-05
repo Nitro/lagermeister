@@ -23,8 +23,9 @@
 
       .title {
         font-family: Arial;
-        font-size: 20px;
-        line-height: 2;
+        font-size: 16px;
+        font-weight: 600;
+        line-height: 2.5;
         padding-left: 8px;
       }
     }
@@ -83,8 +84,7 @@
         th {
           background: #EE5B21;
           color: #fff;
-          text-transform: uppercase;
-          font-size: 12px;
+          font-size: 16px;
           &.last {
             border-right: none;
           }
