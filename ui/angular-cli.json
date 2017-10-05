@@ -9,7 +9,7 @@
       "outDir": "dist",
       "assets": [
         "assets",
-        "favicon.ico"
+        "beer-fav.png"
       ],
       "index": "index.html",
       "main": "main.ts",

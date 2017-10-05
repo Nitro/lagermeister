@@ -160,6 +160,9 @@ export class AppComponent {
       document.head.appendChild(script);
     }
 
+    /*
+     * Function to setup the google charts and add them to the DOM
+     */
     drawChart() {
       for(let i in this.allCharts) {
         // Add a google data table and chart to each chart object
@@ -192,8 +195,11 @@ export class AppComponent {
       this.createWebsocketConnection();
     }
 
+    /*
+     * Setup a WebSocket connection to listen for any incoming messages
+     * Create an interval to push new data to the charts every second
+     */
     createWebsocketConnection() {
-      // Create a connection to listen for incoming data
       this.exampleSocket = new WebSocket("ws://localhost:9010/messages");
       // this.exampleSocket = new WebSocket("ws://10.40.21.28:9010/messages");
       this.exampleSocket.onmessage = (event:any) => {
@@ -213,6 +219,10 @@ export class AppComponent {
       }, 1000)
     }
 
+    /*
+     * Function used to build the proper throughput metrics
+     * And push the data to the pending array
+     */
     aggregateData(data: any) {
       switch (data.MetricType) {
         case 'Throughput':
@@ -247,19 +257,26 @@ export class AppComponent {
       }
     }
 
+    /*
+     * Function to call the relevant Update function based off metric type
+     */
     updateChartData(data: any) {
-      this.updateLastSeenTable(data);
       switch (data.MetricType) {
         case 'Lag':
           this.updateLineChart(this.allCharts[data.MetricType], data);
           this.updateGauge(this.allCharts['LagGauge'], data);
+          this.updateLastSeenTable(data);
           break;
 
         default:
           this.updateLineChart(this.allCharts[data.MetricType], data);
+          this.updateLastSeenTable(data);
       }
     }
 
+    /*
+     * Function to keep the last seen timestamps of each metric up to date
+     */
     updateLastSeenTable(data: any) {
       let newValues = {};
       newValues[data.Sender + " (" + data.SourceIP + ")"] = new Date(data.Timestamp * 1000);
@@ -268,6 +285,9 @@ export class AppComponent {
       this.ref.detectChanges();
     }
 
+    /*
+     * Function used to move the line chart view window and redraw the chart with updated data
+     */
     updateLineChart(chart: any, data: any) {
       let date = new Date(data.Timestamp * 1000);
       let min = new Date((data.Timestamp-60) * 1000);
@@ -289,6 +309,9 @@ export class AppComponent {
       this.removeHiddenRow(chart);
     }
 
+    /*
+     * Function to set the gauge values and redraw itself
+     */
     updateGauge(chart: any, data: any) {
       let extraOptions = {};
       if (data.Threshold) {
@@ -307,12 +330,18 @@ export class AppComponent {
       this.removeHiddenRow(chart);
     }
 
+    /*
+     * Function used to stop the chart data getting too big
+     * After adding a new row we remove an old one
+     */
     removeHiddenRow(chart: any) {
       if (chart.data.getNumberOfRows() > 100) {
         chart.data.removeRow(0)
       }
     }
-
+    /*
+     * Used by the HTML ngFor to filter through the keys of lastSeenValues
+     */
     get getLastSeenKeys() {
       return _.keys(this.lastSeenValues);
     }
