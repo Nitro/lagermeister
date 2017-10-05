@@ -26,6 +26,21 @@ var (
 	stats = expvar.NewMap("stats")
 )
 
+func configureLoggingLevel(level string) {
+	switch {
+	case len(level) == 0:
+		log.SetLevel(log.InfoLevel)
+	case level == "info":
+		log.SetLevel(log.InfoLevel)
+	case level == "warn":
+		log.SetLevel(log.WarnLevel)
+	case level == "error":
+		log.SetLevel(log.ErrorLevel)
+	case level == "debug":
+		log.SetLevel(log.DebugLevel)
+	}
+}
+
 type TcpRelay struct {
 	Address      string `envconfig:"BIND_ADDRESS" default:":35000"`
 	NatsUrl      string `envconfig:"NATS_URL" default:"nats://localhost:4222"`
@@ -35,6 +50,7 @@ type TcpRelay struct {
 	MatchSpec    string `envconfig:"MATCH_SPEC"` // Heka message matcher
 	StatsAddress string `envconfig:"STATS_ADDRESS" default:":34999"`
 	ListenCount  int    `envconfig:"LISTEN_COUNT" default:"20"`
+	LoggingLevel string `envconfig:"LOGGING_LEVEL" default:"info"`
 
 	KeepAlive         bool
 	KeepAliveDuration time.Duration
@@ -217,6 +233,8 @@ func main() {
 	relay.KeepAliveDuration = DefaultKeepAlive
 
 	rubberneck.Print(relay)
+
+	configureLoggingLevel(relay.LoggingLevel)
 
 	// Stats relay
 	go http.ListenAndServe(relay.StatsAddress, nil)

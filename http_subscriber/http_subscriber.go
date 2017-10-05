@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bytes"
 	_ "expvar"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"os/signal"
 	"time"
 
+	"github.com/Nitro/lagermeister/event"
 	"github.com/Nitro/lagermeister/message"
 	log "github.com/Sirupsen/logrus"
 	"github.com/gogo/protobuf/proto"
@@ -28,6 +27,7 @@ const (
 	CheckTime          = 5 * time.Second  // Check the NATS connection
 	PosterPoolSize     = 10               // HTTP posters
 	DefaultHttpTimeout = 10 * time.Second // When posting to e.g. Sumologic
+	StatsChanBufSize   = 4096             // We buffer this many stats/sec
 )
 
 type MessageHandler interface {
@@ -37,7 +37,7 @@ type MessageHandler interface {
 type PrintMessageHandler struct{}
 
 func (p *PrintMessageHandler) HandleMessage(m *stan.Msg, i int) error {
-	log.Printf("[#%d] Received on [%s]: '%s'\n", i, m.Subject, m)
+	log.Debugf("[#%d] Received on [%s]: '%s'\n", i, m.Subject, m)
 	return nil
 }
 
@@ -48,18 +48,20 @@ var (
 // LogFollower attaches to a subject on NATS streaming and processes new
 // log messages as they are received.
 type LogFollower struct {
-	ClusterId   string `envconfig:"CLUSTER_ID" default:"test-cluster"`
-	ClientId    string `envconfig:"CLIENT_ID"`
-	StartSeq    uint64 `envconfig:"START_SEQ"`
-	StartDelta  string `envconfig:"START_DELTA"`
-	DeliverAll  bool   `envconfig:"DELIVER_ALL"`
-	DeliverLast bool   `envconfig:"DELIVER_LAST"`
-	Durable     string `envconfig:"DURABLE"`
-	Qgroup      string `envconfig:"QGROUP"`
-	Unsubscribe bool   `envconfig:"UNSUBSCRIBE"`
-	NatsUrl     string `envconfig:"NATS_URL" default:"nats://localhost:4222"`
-	Subject     string `envconfig:"SUBJECT"`
-	RemoteUrl   string `envconfig:"REMOTE_URL" required:"true"`
+	ClusterId    string `envconfig:"CLUSTER_ID" default:"test-cluster"`
+	ClientId     string `envconfig:"CLIENT_ID"`
+	StartSeq     uint64 `envconfig:"START_SEQ"`
+	StartDelta   string `envconfig:"START_DELTA"`
+	DeliverAll   bool   `envconfig:"DELIVER_ALL"`
+	DeliverLast  bool   `envconfig:"DELIVER_LAST"`
+	Durable      string `envconfig:"DURABLE"`
+	Qgroup       string `envconfig:"QGROUP"`
+	Unsubscribe  bool   `envconfig:"UNSUBSCRIBE"`
+	NatsUrl      string `envconfig:"NATS_URL" default:"nats://localhost:4222"`
+	Subject      string `envconfig:"SUBJECT"`
+	StubHttp     bool   `envconfig:"STUB_HTTP" default:"false"`
+	RemoteUrl    string `envconfig:"REMOTE_URL" required:"true"`
+	LoggingLevel string `envconfig:"LOGGING_LEVEL" default:"info"`
 
 	stanConn       stan.Conn
 	subscription   stan.Subscription
@@ -102,7 +104,7 @@ func (f *LogFollower) manageConnection() {
 	for {
 		select {
 		case <-time.After(5 * time.Second):
-			if f.stanConn == nil || !f.stanConn.NatsConn().IsConnected() {
+			if f.stanConn == nil || f.stanConn.NatsConn() == nil || !f.stanConn.NatsConn().IsConnected() {
 				log.Warn("Disconnected... reconnecting")
 				f.Connect()
 				f.subscribe()
@@ -121,8 +123,17 @@ func (f *LogFollower) SendBatch() {
 	data := f.outPool.Get()
 	defer f.outPool.Put(data)
 
+	// If there's nothing batched, bail now
+	if len(f.batchedRecords) < 1 {
+		return
+	}
+
+	lastSeenTimestamp := time.Unix(0, 0)
+
 	for i := 0; i < BatchSize; i++ {
-		buf, err := ffjson.Marshal(<-f.batchedRecords)
+		rec := <-f.batchedRecords
+		buf, err := ffjson.Marshal(rec)
+		lastSeenTimestamp = time.Unix(*rec.Timestamp, 0)
 		if err != nil {
 			log.Errorf("Error encoding record: %s", err)
 			continue
@@ -143,13 +154,32 @@ func (f *LogFollower) SendBatch() {
 		defer ffjson.Pool(buf)
 	}
 
+	// Report some stats to the stats service
+	f.reportLagMetric(lastSeenTimestamp)
+
 	f.send(data[:startRec])
+}
+
+func (f *LogFollower) reportLagMetric(lastSeen time.Time) {
+	now := time.Now().UTC()
+	lag := now.Sub(lastSeen)
+	if lag < 1 {
+		lag = 0
+	}
+
+	f.poster.TrySendStats(&event.MetricEvent{
+		Timestamp:  now.Unix(),
+		Value:		lag.Seconds(),
+		Sender:     "http-output", // TODO make this configurable
+		MetricType: "Lag",
+	})
 }
 
 func (f *LogFollower) send(buf []byte) {
 	f.poster.Post(buf)
 	// TODO remove this when debugging is complete!
-	ioutil.WriteFile("out.json", buf, 0644)
+	// ioutil.WriteFile("out.json", buf, 0644)
+
 }
 
 // BatchRecord adds a record to the batch channel after Unmarshaling it from
@@ -238,80 +268,27 @@ func (f *LogFollower) Shutdown() {
 	}
 }
 
-type HttpMessagePoster struct {
-	Url     string
-	Timeout time.Duration
-
-	client *http.Client
-	pool   chan struct{}
-}
-
-func NewHttpMessagePoster(url string, timeout time.Duration) *HttpMessagePoster {
-	poster := &HttpMessagePoster{
-		Url:     url,
-		Timeout: timeout,
-		client: &http.Client{
-			Timeout: timeout,
-		},
-		pool: make(chan struct{}, PosterPoolSize),
-	}
-
-	for i := 0; i < PosterPoolSize; i++ {
-		poster.pool <- struct{}{}
-	}
-
-	return poster
-}
-
-// Post is potentially blocking since it checks out a semaphore from
-// the pool. If the pool is maxxed out, the call will block until a
-// semaphore is returned to the pool.
-func (h *HttpMessagePoster) Post(data []byte) {
-	if h.client == nil {
-		log.Error("Client has not been initialized!")
-		return
-	}
-
-	// Post requires a Reader so we make one from the byte slice
-	buf := bytes.NewBuffer(data)
-
-	// Check out a semaphore so we don't have too many at once
-	log.Debugf("Free semaphores: %d/%d", len(h.pool), PosterPoolSize)
-	semaphore := <-h.pool
-	if len(h.pool) < 1 {
-		log.Warn("All semaphores in use!")
-	}
-
-	go func() {
-		startTime := time.Now()
-		defer func() {
-			log.Debugf("POST time taken: %s", time.Now().Sub(startTime))
-		}()
-
-		resp, err := h.client.Post(h.Url, "application/json", buf)
-		h.pool <- semaphore // This should not block if implemented properly
-
-		log.Debugf("Response code: %d", resp.StatusCode)
-
-		// TODO read this and log response on error
-		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
-		}
-
-		if err != nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
-			log.Errorf(
-				"Error posting to %s. Status %d. Error: %s", h.Url, resp.StatusCode, err,
-			)
-		}
-	}()
-}
-
 func serveHttp() {
 	http.ListenAndServe(":34999", nil)
 }
 
+func configureLoggingLevel(level string) {
+	switch {
+	case len(level) == 0:
+		log.SetLevel(log.InfoLevel)
+	case level == "info":
+		log.SetLevel(log.InfoLevel)
+	case level == "warn":
+		log.SetLevel(log.WarnLevel)
+	case level == "error":
+		log.SetLevel(log.ErrorLevel)
+	case level == "debug":
+		log.SetLevel(log.DebugLevel)
+	}
+}
+
 func main() {
-	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.InfoLevel)
 
 	printer = &PrintMessageHandler{}
 
@@ -326,21 +303,30 @@ func main() {
 	follower.batchedRecords = make(chan *message.Message, BatchSize)
 	follower.outPool = bpool.NewBytePool(2, OutRecordSize)
 	follower.quitChan = make(chan struct{})
-	follower.poster = NewHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout)
+	configureLoggingLevel(follower.LoggingLevel)
+
+	if follower.StubHttp {
+		follower.poster = NewStubHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout)
+	} else {
+		follower.poster = NewHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout)
+	}
+
+	// Fire off the stats processor
+	err = follower.poster.ProcessStats()
+	if err != nil {
+		log.Fatalf("Unable to connect to NATS for stats processing! (%s)", err)
+	}
 
 	// Don't let people confuse this for a boolean option
 	if follower.Durable == "false" || follower.Durable == "true" {
-		log.Errorf("Invalid durable queue name: %s. This is not a boolean option.", follower.Durable)
-		os.Exit(1)
+		log.Fatalf("Invalid durable queue name: %s. This is not a boolean option.", follower.Durable)
 	}
 
 	if follower.ClientId == "" {
-		log.Printf("Error: A unique client ID must be specified.")
-		os.Exit(1)
+		log.Fatalf("Error: A unique client ID must be specified.")
 	}
 	if follower.Subject == "" {
-		log.Printf("Error: A subject must be specified.")
-		os.Exit(1)
+		log.Fatalf("Error: A subject must be specified.")
 	}
 
 	err = follower.Connect()
