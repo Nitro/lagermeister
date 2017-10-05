@@ -1,4 +1,9 @@
+.DS_Store
 *.swp
 *.swo
 tcp_receiver/tcp_receiver
 http_receiver/http_receiver
+*.tar.gz
+*.tgz
+stats_proxy/stats_proxy
+generator/generator
