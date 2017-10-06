@@ -1,53 +1,37 @@
 <div class="main-container">
-  <div class="content-container">
+    <div class="content-container">
 
     <div class="header">
-      <img class="logo-img" src="assets/logo3.png">
+        <img class="logo-img" src="assets/logo2.png">
     </div>
 
     <div class="chart-container">
-      <div class="title-container">
-        <span class="title">Lag Metrics</span>
-      </div>
+        <div class="title-container">
+            <span class="title">Lag Metrics</span>
+        </div>
 
       <div class="lag-container">
-        <div class="lag-chart chart"></div>
-        <div class="lag-gauge chart"></div>
+          <lag-chart class="chart"></lag-chart>
+          <lag-gauge class="chart"></lag-gauge>
       </div>
     </div>
 
     <div class="chart-container">
-      <div class="title-container">
-        <span class="title">Throughput Metrics</span>
-      </div>
-      <div class="throughput-chart chart"></div>
+        <div class="title-container">
+            <span class="title">Throughput Metrics</span>
+        </div>
+        <throughput-chart class="chart"></throughput-chart>
     </div>
 
     <div class="chart-container">
-      <div class="title-container">
-        <span class="title">Batch Size Metrics</span>
-      </div>
-      <div class="batch-size-chart chart"></div>
+        <div class="title-container">
+            <span class="title">Batch Count Metrics</span>
+        </div>
+        <batch-count-chart class="chart"></batch-count-chart>
     </div>
 
-    <div class="table-container">
-      <table class="table">
-        <thead>
-        <tr>
-          <th class="title">Event Sender</th>
-          <th class="title">Last Received Message</th>
-        </tr>
-        </thead>
+      <last-seen-table></last-seen-table>
 
-        <tbody>
-        <tr *ngFor='let key of getLastSeenKeys'>
-          <td>{{key}}</td>
-          <td>{{lastSeenValues[key]}}</td>
-        </tr>
-        </tbody>
-      </table>
     </div>
-
-  </div>
 </div>
 

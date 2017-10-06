@@ -1,0 +1,38 @@
+.table-container {
+    .table {
+        font-family: Arial;
+        margin: 25px auto;
+        border-collapse: collapse;
+        border: 1px solid #eee;
+        border-bottom: 2px solid #EE5B21;
+        box-shadow: 0 0 20px rgba(0,0,0,0.10),
+        0 10px 20px rgba(0,0,0,0.05),
+        0 20px 20px rgba(0,0,0,0.05),
+        0 30px 20px rgba(0,0,0,0.05);
+
+        tr {
+            &:hover {
+                background: #f4f4f4;
+
+                td {
+                    color: #555;
+                }
+            }
+        }
+
+        th, td {
+            color: #999;
+            border: 1px solid #eee;
+            padding: 12px 35px;
+            border-collapse: collapse;
+        }
+        th {
+            background: #EE5B21;
+            color: #fff;
+            font-size: 16px;
+            &.last {
+                border-right: none;
+            }
+        }
+    }
+}

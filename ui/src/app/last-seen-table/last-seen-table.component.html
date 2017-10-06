@@ -1,0 +1,17 @@
+<div class="table-container">
+    <table class="table">
+        <thead>
+        <tr>
+            <th class="title">Event Sender</th>
+            <th class="title">Last Received Message</th>
+        </tr>
+        </thead>
+
+        <tbody>
+        <tr *ngFor='let key of getLastSeenKeys'>
+            <td>{{key}}</td>
+            <td>{{lastSeenValues[key]}}</td>
+        </tr>
+        </tbody>
+    </table>
+</div>
