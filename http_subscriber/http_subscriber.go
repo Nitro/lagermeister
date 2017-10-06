@@ -21,11 +21,11 @@ import (
 )
 
 const (
-	BatchSize          = 25
+	BatchSize          = 100
 	MaxEncodedSize     = 21 * 1024 // Maximum encoded JSON size
 	OutRecordSize      = BatchSize*MaxEncodedSize + BatchSize + 10
 	CheckTime          = 5 * time.Second  // Check the NATS connection
-	PosterPoolSize     = 10               // HTTP posters
+	PosterPoolSize     = 25               // HTTP posters
 	DefaultHttpTimeout = 10 * time.Second // When posting to e.g. Sumologic
 	StatsChanBufSize   = 4096             // We buffer this many stats/sec
 )
@@ -71,6 +71,8 @@ type LogFollower struct {
 	quitChan       chan struct{}
 	startOpt       stan.SubscriptionOption
 	poster         *HttpMessagePoster
+	lastSeenTime   time.Time // The timestamp from the last event we saw
+	lastWallTime   time.Time // The last actual time we saw an event
 }
 
 func NewLogFollower() *LogFollower {
@@ -78,6 +80,8 @@ func NewLogFollower() *LogFollower {
 		batchedRecords: make(chan *message.Message, BatchSize),
 		outPool:        bpool.NewBytePool(2, OutRecordSize),
 		quitChan:       make(chan struct{}),
+		lastSeenTime:   time.Unix(0, 0),
+		lastWallTime:   time.Unix(0, 0),
 	}
 }
 
@@ -128,12 +132,13 @@ func (f *LogFollower) SendBatch() {
 		return
 	}
 
-	lastSeenTimestamp := time.Unix(0, 0)
-
+	// TODO this can block for an indefinite amount of time without sending
+	// messages if we don't receive any more...
+	var rec *message.Message
 	for i := 0; i < BatchSize; i++ {
-		rec := <-f.batchedRecords
+		rec = <-f.batchedRecords
+
 		buf, err := ffjson.Marshal(rec)
-		lastSeenTimestamp = time.Unix(*rec.Timestamp, 0)
 		if err != nil {
 			log.Errorf("Error encoding record: %s", err)
 			continue
@@ -150,28 +155,54 @@ func (f *LogFollower) SendBatch() {
 		data[startRec] = '\n'
 		startRec += 1
 
+		// Track the last actual time we saw an event (for lag calculation)
+		now := time.Now().UTC()
+		if f.lastWallTime.Before(now) {
+			f.lastWallTime = now
+		}
+
 		// Kinda dangerous to do this in a for loop, let's see how it goes
 		defer ffjson.Pool(buf)
 	}
 
-	// Report some stats to the stats service
-	f.reportLagMetric(lastSeenTimestamp)
+	// Track the last timestamp we saw (for lag calculation)
+	recTime := time.Unix(*rec.Timestamp/1e9, 0)
+	if f.lastSeenTime.Before(recTime) {
+		f.lastSeenTime = recTime
+	}
 
 	f.send(data[:startRec])
 }
 
-func (f *LogFollower) reportLagMetric(lastSeen time.Time) {
-	now := time.Now().UTC()
-	lag := now.Sub(lastSeen)
-	if lag < 1 {
+// reportLag runs in the background and reports a lag metric to the stats
+// system.
+func (f *LogFollower) reportLag() {
+	for {
+		select {
+		case <-time.After(1 * time.Second):
+			f.sendLagMetric()
+		case <-f.quitChan:
+			return
+		}
+	}
+}
+
+func (f *LogFollower) sendLagMetric() {
+	lag := f.lastWallTime.Sub(f.lastSeenTime)
+	if lag < 0 {
+		log.Warn("Stale lag metric... timestamps are not in sync!")
 		lag = 0
 	}
 
 	f.poster.TrySendStats(&event.MetricEvent{
-		Timestamp:  now.Unix(),
-		Value:		lag.Seconds(),
+		Timestamp:  time.Now().UTC().Unix(),
+		Value:      lag.Seconds(),
 		Sender:     "http-output", // TODO make this configurable
 		MetricType: "Lag",
+		Threshold: map[string]float64{
+			"Warn": 30,
+			"Error": 60,
+		},
 	})
 }
 
@@ -179,7 +210,6 @@ func (f *LogFollower) send(buf []byte) {
 	f.poster.Post(buf)
 	// TODO remove this when debugging is complete!
 	// ioutil.WriteFile("out.json", buf, 0644)
-
 }
 
 // BatchRecord adds a record to the batch channel after Unmarshaling it from
@@ -251,6 +281,8 @@ func (f *LogFollower) Follow() error {
 	}
 
 	go f.manageConnection()
+
+	go f.reportLag()
 
 	return nil
 }

@@ -67,6 +67,7 @@ func (h *HttpMessagePoster) Post(data []byte) {
 
 		resp, err := h.client.Post(h.Url, "application/json", buf)
 		h.semaphores <- semaphore // This should not block if implemented properly
+		log.Debugf("Semaphore wait time: %s", time.Now().Sub(startTime))
 		if err != nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
 			status := -1
 

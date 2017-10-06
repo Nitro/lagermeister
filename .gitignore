@@ -7,3 +7,5 @@ http_receiver/http_receiver
 *.tgz
 stats_proxy/stats_proxy
 stats_proxy/generator/generator
+log_generator/log_generator
+http_subscriber/http_subscriber

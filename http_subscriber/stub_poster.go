@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"gopkg.in/jarcoal/httpmock.v1"
-	log "github.com/Sirupsen/logrus"
 )
 
 const (
@@ -32,7 +31,7 @@ func randomlySlowResponder(*http.Request) (*http.Response, error) {
 	resp, _ := httpmock.NewJsonResponse(200, body)
 
 	sleepDuration := time.Duration(random(MinStubbedResponseTime, MaxStubbedResponseTime)) * time.Millisecond
-	log.Warn("Sleep duration: %s", sleepDuration)
+	println(sleepDuration.String())
 	time.Sleep(sleepDuration)
 
 	return resp, nil

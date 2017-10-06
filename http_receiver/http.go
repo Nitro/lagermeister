@@ -57,6 +57,7 @@ func (h *HttpRelay) init() error {
 			Subject:   h.Subject,
 			Stats:     stats,
 		}
+		h.connection.Connect()
 	}
 
 	return nil
@@ -111,7 +112,7 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 		h.connection.Connect()
 
 		if !h.connection.IsAvailable() {
-			log.Error("Breaker is off, refusing message!")
+			log.Error("Breaker is on, refusing message!")
 			stats.Add("refusedCount", 1)
 			http.Error(response, `{"status": "error", "message": "Invalid NATS connection"}`, 502)
 			return
