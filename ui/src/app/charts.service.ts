@@ -180,7 +180,7 @@ export class ChartsService {
     }
 
     /**
-     * Updateh the gauge data for a given chart
+     * Update the gauge data for a given chart
      * @param data
      * @param chartObj
      */
