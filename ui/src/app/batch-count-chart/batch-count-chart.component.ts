@@ -6,8 +6,7 @@ import { ChartsService } from '../charts.service';
 
 @Component({
     selector: 'batch-count-chart',
-    templateUrl: './batch-count-chart.component.html',
-    providers: [ChartsService],
+    templateUrl: './batch-count-chart.component.html'
 })
 
 export class BatchCountChartComponent {
@@ -31,19 +30,12 @@ export class BatchCountChartComponent {
             }, this.chartsService.getLineChartOptions())
         };
 
-        let script = document.createElement('script');
-        script.src = '//www.google.com/jsapi';
-        script.onload = () => {
-            (<any>window).google.charts.load("visualization", "1", {packages:["corechart", "gauge"]});
-            (<any>window).google.charts.setOnLoadCallback(this.chartsService.drawLineChart.bind(this, this.batchCountChartObject));
-        };
-        document.head.appendChild(script);
+        (<any>window).google.charts.setOnLoadCallback(this.chartsService.drawLineChart.bind(this, this.batchCountChartObject));
 
         let pendingData: Array<Object> = [];
 
-        let obsv = this.chartsService.getObservable();
-        obsv.subscribe( (evt: any)  => {
-            let data = JSON.parse(evt.data);
+        this.chartsService.getObservable().subscribe( (message: any) => {
+            let data = JSON.parse(message.data);
             if (data.MetricType === 'BatchCount') {
                 pendingData.push(data);
             }

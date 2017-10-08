@@ -3,6 +3,9 @@ import { NgModule } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { HttpModule } from '@angular/http';
 
+// Services
+import { ChartsService } from './charts.service'
+
 // Components
 import { AppComponent } from './app.component';
 import { BatchCountChartComponent } from './batch-count-chart/batch-count-chart.component';
@@ -25,7 +28,9 @@ import { ThroughtputChartComponent } from './throughput-chart/throughput-chart.c
         FormsModule,
         HttpModule,
     ],
-    providers: [],
+    providers: [
+        ChartsService,
+    ],
     bootstrap: [AppComponent]
 })
 export class AppModule { }

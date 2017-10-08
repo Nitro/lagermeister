@@ -7,8 +7,7 @@ import { ChartsService } from '../charts.service';
 @Component({
     selector: 'last-seen-table',
     templateUrl: './last-seen-table.component.html',
-    styleUrls: ['./last-seen-table.component.scss'],
-    providers: [ChartsService],
+    styleUrls: ['./last-seen-table.component.scss']
 })
 
 export class LastSeenTableComponent {
@@ -20,9 +19,8 @@ export class LastSeenTableComponent {
 
         this.lastSeenValues = {};
 
-        let obsv = this.chartsService.getObservable();
-        obsv.subscribe( (evt: any)  => {
-            this.updateLastSeenTable(JSON.parse(evt.data));
+        this.chartsService.getObservable().subscribe( (message: any) => {
+            this.updateLastSeenTable(JSON.parse(message.data));
         });
     }
 

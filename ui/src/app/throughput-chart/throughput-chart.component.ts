@@ -6,8 +6,7 @@ import { ChartsService } from '../charts.service';
 
 @Component({
     selector: 'throughput-chart',
-    templateUrl: './throughput-chart.component.html',
-    providers: [ChartsService],
+    templateUrl: './throughput-chart.component.html'
 })
 
 export class ThroughtputChartComponent {
@@ -43,21 +42,13 @@ export class ThroughtputChartComponent {
     }
 
     setupChart() {
-        let script = document.createElement('script');
-        script.src = '//www.google.com/jsapi';
-        script.onload = () => {
-            (<any>window).google.charts.load("visualization", "1", {packages: ["corechart", "gauge"]});
-            (<any>window).google.charts.setOnLoadCallback(this.chartsService.drawLineChart.bind(this, this.throughputChartObject));
-        };
-        document.head.appendChild(script);
+        (<any>window).google.charts.setOnLoadCallback(this.chartsService.drawLineChart.bind(this, this.throughputChartObject));
 
         this.pendingThroughput = [];
 
-        let obsv = this.chartsService.getObservable();
-        obsv.subscribe((evt:any) => {
-            let data = JSON.parse(evt.data);
+        this.chartsService.getObservable().subscribe( (message: any) => {
+            let data = JSON.parse(message.data);
             if (data.MetricType === 'Throughput') {
-                // console.log(data);
                 this.aggregateData(data);
             }
         });

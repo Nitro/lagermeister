@@ -7,9 +7,7 @@ import { ChartsService } from '../charts.service';
 @Component({
     selector: 'lag-gauge',
     templateUrl: './lag-gauge.component.html',
-    styleUrls: ['./lag-gauge.component.scss'],
-
-    providers: [ChartsService],
+    styleUrls: ['./lag-gauge.component.scss']
 })
 
 export class LagGaugeComponent {
@@ -31,19 +29,12 @@ export class LagGaugeComponent {
             }
         };
 
-        let script = document.createElement('script');
-        script.src = '//www.google.com/jsapi';
-        script.onload = () => {
-            (<any>window).google.charts.load("visualization", "1", {packages:["corechart", "gauge"]});
-            (<any>window).google.charts.setOnLoadCallback(this.chartsService.drawGauge.bind(this, this.gaugeObject));
-        };
-        document.head.appendChild(script);
+        (<any>window).google.charts.setOnLoadCallback(this.chartsService.drawGauge.bind(this, this.gaugeObject));
 
         let pendingData: Array<Object> = [];
 
-        let obsv = this.chartsService.getObservable();
-        obsv.subscribe( (evt: any)  => {
-            let data = JSON.parse(evt.data);
+        this.chartsService.getObservable().subscribe( (message: any) => {
+            let data = JSON.parse(message.data);
             if (data.MetricType === 'Lag') {
                 pendingData.push(data);
             }

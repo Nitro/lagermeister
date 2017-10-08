@@ -9,44 +9,29 @@ export class ChartsService {
 
     hostAddress: string = 'localhost:9010';
     chartConfig: any = '';
-    observable: any;
+    chartDataSubject: Subject<any> = new Subject<any>();
 
-    constructor(private http: Http) {
-        this.create('ws://' + this.hostAddress + '/messages');
-    }
-
-    /**
-     * Create a web socket connection and set the observable
-     * @param url
-     * @returns {any}
-     */
-    private create(url: any): Subject<MessageEvent> {
-        let ws = new WebSocket(url);
-
-        this.observable = Observable.create(
-            (obs: Observer<MessageEvent>) => {
-                ws.onmessage = obs.next.bind(obs);
-                ws.onerror = obs.error.bind(obs);
-                ws.onclose = obs.complete.bind(obs);
-                return ws.close.bind(ws);
-            }
-        );
-        let observer = {
-            next: (data: Object) => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(data);
-                }
-            },
-        };
-        return Subject.create(observer, this.observable);
-    }
+    constructor(private http: Http) {}
 
     /**
      * Return the observable object
+     * @returns {Observable<any>}
+     */
+    getObservable(): Observable<any> {
+        return this.chartDataSubject.asObservable();
+    }
+
+    /**
+     * Create a web socket connection and send the data to the observable
      * @returns {any}
      */
-    getObservable() {
-        return this.observable;
+    createWebSocketConnection() {
+        let url = 'ws://' + this.hostAddress + '/messages';
+        let ws = new WebSocket(url);
+
+        ws.onmessage = (d: any) => {
+           return this.chartDataSubject.next(d);
+        };
     }
 
     /**
@@ -65,25 +50,6 @@ export class ChartsService {
                         reject(err);
                     });
         })
-    }
-
-    /**
-     * Load the google scripts and bind to callback function
-     * @param callBackFn
-     */
-    loadGoogleScripts(callBackFn: any) {
-        // if (!this.googleChartsLoaded) {
-        //     let script = document.createElement('script');
-        //     script.src = '//www.google.com/jsapi';
-        //     script.onload = () => {
-        //         (<any>window).google.charts.load("visualization", "1", {packages: ["corechart", "gauge"]});
-        //         (<any>window).google.charts.setOnLoadCallback(callBackFn.bind(this));
-        //         this.googleChartsLoaded = true;
-        //     };
-        //     document.head.appendChild(script);
-        // } else {
-        //     (<any>window).google.charts.setOnLoadCallback(callBackFn.bind(this));
-        // }
     }
 
     /**
