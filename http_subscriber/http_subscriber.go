@@ -27,7 +27,6 @@ const (
 	CheckTime          = 5 * time.Second  // Check the NATS connection
 	PosterPoolSize     = 25               // HTTP posters
 	DefaultHttpTimeout = 10 * time.Second // When posting to e.g. Sumologic
-	StatsChanBufSize   = 4096             // We buffer this many stats/sec
 )
 
 type MessageHandler interface {
@@ -73,6 +72,7 @@ type LogFollower struct {
 	poster         *HttpMessagePoster
 	lastSeenTime   time.Time // The timestamp from the last event we saw
 	lastWallTime   time.Time // The last actual time we saw an event
+	MetricReporter *event.MetricReporter
 }
 
 func NewLogFollower() *LogFollower {
@@ -194,16 +194,19 @@ func (f *LogFollower) sendLagMetric() {
 		lag = 0
 	}
 
-	f.poster.TrySendStats(&event.MetricEvent{
-		Timestamp:  time.Now().UTC().Unix(),
-		Value:      lag.Seconds(),
-		Sender:     "http-output", // TODO make this configurable
-		MetricType: "Lag",
-		Threshold: map[string]float64{
-			"Warn": 30,
-			"Error": 60,
-		},
-	})
+	if f.MetricReporter != nil {
+		f.MetricReporter.TrySendMetrics(&event.MetricEvent{
+			Timestamp:  time.Now().UTC().Unix(),
+			Value:      lag.Seconds(),
+			Sender:     "http-output", // TODO make this configurable
+			MetricType: "Lag",
+			Aggregate:  "Total",
+			Threshold: map[string]float64{
+				"Warn": 30,
+				"Error": 60,
+			},
+		})
+	}
 }
 
 func (f *LogFollower) send(buf []byte) {
@@ -289,7 +292,9 @@ func (f *LogFollower) Follow() error {
 
 // Unfollow stops following the logs
 func (f *LogFollower) Unfollow() {
-	f.subscription.Unsubscribe()
+	if f.subscription != nil {
+		f.subscription.Unsubscribe()
+	}
 }
 
 // Shutdown disconnects from the NATS streaming server
@@ -343,12 +348,6 @@ func main() {
 		follower.poster = NewHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout)
 	}
 
-	// Fire off the stats processor
-	err = follower.poster.ProcessStats()
-	if err != nil {
-		log.Fatalf("Unable to connect to NATS for stats processing! (%s)", err)
-	}
-
 	// Don't let people confuse this for a boolean option
 	if follower.Durable == "false" || follower.Durable == "true" {
 		log.Fatalf("Invalid durable queue name: %s. This is not a boolean option.", follower.Durable)
@@ -374,6 +373,14 @@ func main() {
 	log.Printf("Listening on [%s], clientID=[%s], qgroup=[%s] durable=[%s]\n",
 		follower.Subject, follower.ClientId, follower.Qgroup, follower.Durable,
 	)
+
+	reporter := event.NewMetricReporter()
+	err = reporter.ProcessMetrics()
+	if err != nil {
+		log.Fatalf("Unable to connect to NATS for stats reporting! (%s)", err)
+	}
+	follower.MetricReporter = reporter
+	follower.poster.MetricReporter = reporter
 
 	// Wait for a SIGINT (perhaps triggered by user with CTRL-C)
 	// Run cleanup when signal is received
