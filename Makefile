@@ -18,8 +18,8 @@ tcp_receiver/tcp_receiver:
 	cd tcp_receiver && go build
 
 clean:
-	rm http_receiver/http_receiver
-	rm http_subscriber/http_subscriber
-	rm log_generator/log_generator
-	rm stats_proxy/stats_proxy
-	rm tcp_receiver/tcp_receiver
+	rm -f http_receiver/http_receiver
+	rm -f http_subscriber/http_subscriber
+	rm -f log_generator/log_generator
+	rm -f stats_proxy/stats_proxy
+	rm -f tcp_receiver/tcp_receiver
