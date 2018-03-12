@@ -31,6 +31,7 @@ of three main parts:
    message. Becaus the server tracks the current offset, and offset in time,
    consumers can start from where they left off and don't need to store state.
    They may also replay starting from a particular point in time.
+   **location**: external service!
 
 3. **Subscriber**: A NATS-Streaming subscriber that will pull logs from NATS-
    Streaming and batch them into groups of JSON messages. These will then be
@@ -41,12 +42,52 @@ of three main parts:
    In this way NATS-Streaming can load balance the subscribers.
    **location**: `http_subscriber/`
 
-Configuration
--------------
+Components
+----------
 
-Programs are configured with environment variables. See the source for more
-information on available configuration items. Here are some examples:
+These are the components that currently make up Lagermeister, and the
+environment variables that are required to configure them.
 
+### `http_receiver`
+
+Receives incoming Protobuf messages over HTTP, validates them and stuffs them
+into a NATS streaming channel.
+
+```
+KEY                 TYPE      DEFAULT                  REQUIRED    DESCRIPTION
+SUB_BIND_ADDRESS    String    :35001
+SUB_NATS_URL        String    nats://localhost:4222
+SUB_CLUSTER_ID      String    test-cluster
+SUB_CLIENT_ID       String                             true
+SUB_SUBJECT         String    lagermeister-test
+SUB_MATCH_SPEC      String
+```
+
+### `http_subscriber`
+
+Listens on a NATS streaming channel and batches and sends groups of messages in
+JSON format to a defined HTTP endpoint.
+
+```
+KEY                  TYPE                DEFAULT                  REQUIRED    DESCRIPTION
+SUB_CLUSTER_ID       String              test-cluster
+SUB_CLIENT_ID        String
+SUB_START_SEQ        Unsigned Integer
+SUB_START_DELTA      String
+SUB_DELIVER_ALL      True or False
+SUB_DELIVER_LAST     True or False
+SUB_DURABLE          String
+SUB_QGROUP           String
+SUB_UNSUBSCRIBE      True or False
+SUB_NATS_URL         String              nats://localhost:4222
+SUB_SUBJECT          String
+SUB_STUB_HTTP        True or False       false
+SUB_REMOTE_URL       String                                       true
+SUB_LOGGING_LEVEL    String              info
+SUB_BATCH_TIMEOUT    Duration            10s
+```
+
+An example of configuring this component would look something like this:
 ```
 $ SUB_CLIENT_ID=asdf \
   SUB_SUBJECT="lagermeister-test" \
@@ -54,4 +95,42 @@ $ SUB_CLIENT_ID=asdf \
   SUB_DELIVER_ALL=false \
   SUB_REMOTE_URL="https://endpoint1.collection.us2.sumologic.com/receiver/v1/http/ZaVnC4dhaV2Djfx_aJ93Ht013FC51G9_FuWipqPPW5RSxez24iXceWKhPfxlPh-GVEyTX_ZBxrCMwUh-CMuNn8yPdhXxAxVZkEJWFuO7lmcja6wE3V6WOg==" \
   go run subscriber.go
+```
+
+
+### `log_generator`
+
+Generates messages and sends them to a local instance of the `http_receiver`.
+Currently takes no configuration.
+
+### `stats_proxy`
+
+Used by the web monitoring frontend to gather statistics from a NATS pub/sub
+channel and relay them over a websocket.
+
+```
+KEY                TYPE       DEFAULT                  REQUIRED    DESCRIPTION
+SUB_HTTP_PORT      Integer    9010
+SUB_NATS_URL       String     nats://localhost:4222
+SUB_SUB_CHANNEL    String     stats-events
+```
+
+### `tcp_receiver`
+
+A receiver that listens on TCP and takes Heka-framed streaming TCP messages
+and relays them into a NATS streaming channel.
+
+```
+KEY                      TYPE             DEFAULT                  REQUIRED    DESCRIPTION
+SUB_BIND_ADDRESS         String           :35000
+SUB_NATS_URL             String           nats://localhost:4222
+SUB_CLUSTER_ID           String           test-cluster
+SUB_CLIENT_ID            String                                    true
+SUB_SUBJECT              String           lagermeister-test
+SUB_MATCH_SPEC           String
+SUB_STATS_ADDRESS        String           :34999
+SUB_LISTEN_COUNT         Integer          20
+SUB_LOGGING_LEVEL        String           info
+SUB_KEEPALIVE            True or False
+SUB_KEEPALIVEDURATION    Duration
 ```
