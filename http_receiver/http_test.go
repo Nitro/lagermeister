@@ -10,7 +10,7 @@ import (
 
 	"github.com/Nitro/lagermeister/message"
 	"github.com/Nitro/lagermeister/publisher"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	. "github.com/SmartyStreets/goconvey/convey"
 )
 

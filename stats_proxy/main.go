@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -92,6 +93,10 @@ func main() {
 	messageChan = make(chan []byte)
 
 	var config Config
+	if os.Args[1] == "--help" || os.Args[1] == "-h" {
+		envconfig.Usage("sub", &config)
+		os.Exit(1)
+	}
 	envconfig.Process("proxy", &config)
 	rubberneck.Print(config)
 

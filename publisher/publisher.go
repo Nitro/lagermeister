@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Nitro/lagermeister/message"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/nats-io/go-nats-streaming"
 )
 

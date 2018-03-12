@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/Nitro/lagermeister/message"
 	"github.com/Nitro/lagermeister/publisher"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/gogo/protobuf/proto"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/oxtoacart/bpool"
@@ -199,6 +200,12 @@ func (h *HttpRelay) readAll(r io.Reader) (b []byte, bytesRead int, err error) {
 
 func main() {
 	var relay HttpRelay
+
+	if os.Args[1] == "--help" || os.Args[1] == "-h" {
+		envconfig.Usage("sub", &relay)
+		os.Exit(1)
+	}
+
 	err := envconfig.Process("rcvr", &relay)
 	if err != nil {
 		log.Fatalf("Unable to start: %s", err)

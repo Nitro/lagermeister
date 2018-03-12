@@ -10,13 +10,13 @@ import (
 
 	"github.com/Nitro/lagermeister/event"
 	"github.com/Nitro/lagermeister/message"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/gogo/protobuf/proto"
 	"github.com/nats-io/go-nats-streaming"
 	"github.com/nats-io/go-nats-streaming/pb"
 	"github.com/oxtoacart/bpool"
 	"github.com/pquerna/ffjson/ffjson"
-	"github.com/relistan/envconfig"
+	"github.com/kelseyhightower/envconfig"
 	"gopkg.in/relistan/rubberneck.v1"
 )
 
@@ -47,20 +47,21 @@ var (
 // LogFollower attaches to a subject on NATS streaming and processes new
 // log messages as they are received.
 type LogFollower struct {
-	ClusterId    string `envconfig:"CLUSTER_ID" default:"test-cluster"`
-	ClientId     string `envconfig:"CLIENT_ID"`
-	StartSeq     uint64 `envconfig:"START_SEQ"`
-	StartDelta   string `envconfig:"START_DELTA"`
-	DeliverAll   bool   `envconfig:"DELIVER_ALL"`
-	DeliverLast  bool   `envconfig:"DELIVER_LAST"`
-	Durable      string `envconfig:"DURABLE"`
-	Qgroup       string `envconfig:"QGROUP"`
-	Unsubscribe  bool   `envconfig:"UNSUBSCRIBE"`
-	NatsUrl      string `envconfig:"NATS_URL" default:"nats://localhost:4222"`
-	Subject      string `envconfig:"SUBJECT"`
-	StubHttp     bool   `envconfig:"STUB_HTTP" default:"false"`
-	RemoteUrl    string `envconfig:"REMOTE_URL" required:"true"`
-	LoggingLevel string `envconfig:"LOGGING_LEVEL" default:"info"`
+	ClusterId    string        `envconfig:"CLUSTER_ID" default:"test-cluster"`
+	ClientId     string        `envconfig:"CLIENT_ID"`
+	StartSeq     uint64        `envconfig:"START_SEQ"`
+	StartDelta   string        `envconfig:"START_DELTA"`
+	DeliverAll   bool          `envconfig:"DELIVER_ALL"`
+	DeliverLast  bool          `envconfig:"DELIVER_LAST"`
+	Durable      string        `envconfig:"DURABLE"`
+	Qgroup       string        `envconfig:"QGROUP"`
+	Unsubscribe  bool          `envconfig:"UNSUBSCRIBE"`
+	NatsUrl      string        `envconfig:"NATS_URL" default:"nats://localhost:4222"`
+	Subject      string        `envconfig:"SUBJECT"`
+	StubHttp     bool          `envconfig:"STUB_HTTP" default:"false"`
+	RemoteUrl    string        `envconfig:"REMOTE_URL" required:"true"`
+	LoggingLevel string        `envconfig:"LOGGING_LEVEL" default:"info"`
+	BatchTimeout time.Duration `envconfig:"BATCH_TIMEOUT" default:"10s"`
 
 	stanConn       stan.Conn
 	subscription   stan.Subscription
@@ -120,7 +121,8 @@ func (f *LogFollower) manageConnection() {
 }
 
 // SendBatch takes what's currently in the batchedRecords channel and sends
-// it to the remote service.
+// it to the remote service. It will time out waiting on a new batch after
+// BatchTimeout.
 func (f *LogFollower) SendBatch() {
 	var startRec int
 
@@ -132,11 +134,25 @@ func (f *LogFollower) SendBatch() {
 		return
 	}
 
-	// TODO this can block for an indefinite amount of time without sending
-	// messages if we don't receive any more...
+	// Release all the buffers we collect
+	freeChan := make(chan []byte)
+	go func() {
+		for buf := range freeChan {
+			ffjson.Pool(buf)
+		}
+	}()
+
+	// We try to get a completed batch to send. If one isn't there, we
+	// give up after BatchTimeout.
 	var rec *message.Message
 	for i := 0; i < BatchSize; i++ {
-		rec = <-f.batchedRecords
+		select {
+		case rec = <-f.batchedRecords:
+			// moving along
+		case <-time.After(f.BatchTimeout):
+			// Give up
+			break
+		}
 
 		buf, err := ffjson.Marshal(rec)
 		if err != nil {
@@ -161,9 +177,12 @@ func (f *LogFollower) SendBatch() {
 			f.lastWallTime = now
 		}
 
-		// Kinda dangerous to do this in a for loop, let's see how it goes
-		defer ffjson.Pool(buf)
+		// Queue up a buffer for freeing
+		freeChan <- buf
 	}
+
+	// Release the goroutine managing this pool
+	close(freeChan)
 
 	// Track the last timestamp we saw (for lag calculation)
 	recTime := time.Unix(*rec.Timestamp/1e9, 0)
@@ -202,7 +221,7 @@ func (f *LogFollower) sendLagMetric() {
 			MetricType: "Lag",
 			Aggregate:  "Total",
 			Threshold: map[string]float64{
-				"Warn": 30,
+				"Warn":  30,
 				"Error": 60,
 			},
 		})
@@ -228,7 +247,7 @@ func (f *LogFollower) BatchRecord(msg *stan.Msg) {
 	select {
 	case f.batchedRecords <- &record: // do nothing
 	default:
-		go f.SendBatch()
+		go f.SendBatch() // We know the batch is full, so try to send
 		log.Debug("Sending batch, waiting to batch new record")
 		f.batchedRecords <- &record
 	}
@@ -330,11 +349,18 @@ func main() {
 	printer = &PrintMessageHandler{}
 
 	var follower LogFollower
+
+	if os.Args[1] == "--help" || os.Args[1] == "-h" {
+		envconfig.Usage("sub", &follower)
+		os.Exit(1)
+	}
+
 	err := envconfig.Process("sub", &follower)
 	if err != nil {
 		log.Errorf("Processing config: %s", err)
 		os.Exit(1)
 	}
+
 	rubberneck.Print(follower)
 
 	follower.batchedRecords = make(chan *message.Message, BatchSize)

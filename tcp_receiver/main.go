@@ -6,13 +6,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/Nitro/lagermeister/message"
 	"github.com/Nitro/lagermeister/publisher"
-	log "github.com/Sirupsen/logrus"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/oxtoacart/bpool"
+	log "github.com/sirupsen/logrus"
 	"gopkg.in/relistan/rubberneck.v1"
 )
 
@@ -228,6 +229,10 @@ func (t *TcpRelay) handleConnection(conn io.ReadCloser) {
 
 func main() {
 	var relay TcpRelay
+	if os.Args[1] == "--help" || os.Args[1] == "-h" {
+		envconfig.Usage("sub", &relay)
+		os.Exit(1)
+	}
 	envconfig.Process("tcprcvr", &relay)
 	relay.KeepAlive = true
 	relay.KeepAliveDuration = DefaultKeepAlive

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Nitro/lagermeister/event"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
 
 type HttpMessagePoster struct {

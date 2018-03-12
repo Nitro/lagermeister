@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/Nitro/lagermeister/message"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/gogo/protobuf/proto"
 	"github.com/oxtoacart/bpool"
 )
