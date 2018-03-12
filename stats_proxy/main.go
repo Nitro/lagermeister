@@ -93,11 +93,14 @@ func main() {
 	messageChan = make(chan []byte)
 
 	var config Config
-	if os.Args[1] == "--help" || os.Args[1] == "-h" {
-		envconfig.Usage("sub", &config)
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		envconfig.Usage("proxy", &config)
 		os.Exit(1)
 	}
-	envconfig.Process("proxy", &config)
+	err := envconfig.Process("proxy", &config)
+	if err != nil {
+		log.Fatal(err)
+	}
 	rubberneck.Print(config)
 
 	nc, err := nats.Connect(config.NatsUrl)

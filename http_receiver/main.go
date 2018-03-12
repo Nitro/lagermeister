@@ -201,8 +201,8 @@ func (h *HttpRelay) readAll(r io.Reader) (b []byte, bytesRead int, err error) {
 func main() {
 	var relay HttpRelay
 
-	if os.Args[1] == "--help" || os.Args[1] == "-h" {
-		envconfig.Usage("sub", &relay)
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		envconfig.Usage("rcvr", &relay)
 		os.Exit(1)
 	}
 

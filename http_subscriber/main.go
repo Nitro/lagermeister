@@ -350,15 +350,14 @@ func main() {
 
 	var follower LogFollower
 
-	if os.Args[1] == "--help" || os.Args[1] == "-h" {
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
 		envconfig.Usage("sub", &follower)
 		os.Exit(1)
 	}
 
 	err := envconfig.Process("sub", &follower)
 	if err != nil {
-		log.Errorf("Processing config: %s", err)
-		os.Exit(1)
+		log.Fatalf("Processing config: %s", err)
 	}
 
 	rubberneck.Print(follower)

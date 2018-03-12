@@ -54,13 +54,13 @@ Receives incoming Protobuf messages over HTTP, validates them and stuffs them
 into a NATS streaming channel.
 
 ```
-KEY                 TYPE      DEFAULT                  REQUIRED    DESCRIPTION
-SUB_BIND_ADDRESS    String    :35001
-SUB_NATS_URL        String    nats://localhost:4222
-SUB_CLUSTER_ID      String    test-cluster
-SUB_CLIENT_ID       String                             true
-SUB_SUBJECT         String    lagermeister-test
-SUB_MATCH_SPEC      String
+KEY                  TYPE      DEFAULT                  REQUIRED    DESCRIPTION
+RCVR_BIND_ADDRESS    String    :35001
+RCVR_NATS_URL        String    nats://localhost:4222
+RCVR_CLUSTER_ID      String    test-cluster
+RCVR_CLIENT_ID       String                             true
+RCVR_SUBJECT         String    lagermeister-test
+RCVR_MATCH_SPEC      String
 ```
 
 ### `http_subscriber`
@@ -109,10 +109,10 @@ Used by the web monitoring frontend to gather statistics from a NATS pub/sub
 channel and relay them over a websocket.
 
 ```
-KEY                TYPE       DEFAULT                  REQUIRED    DESCRIPTION
-SUB_HTTP_PORT      Integer    9010
-SUB_NATS_URL       String     nats://localhost:4222
-SUB_SUB_CHANNEL    String     stats-events
+KEY                  TYPE       DEFAULT                  REQUIRED    DESCRIPTION
+PROXY_HTTP_PORT      Integer    9010
+PROXY_NATS_URL       String     nats://localhost:4222
+PROXY_SUB_CHANNEL    String     stats-events
 ```
 
 ### `tcp_receiver`
@@ -121,16 +121,16 @@ A receiver that listens on TCP and takes Heka-framed streaming TCP messages
 and relays them into a NATS streaming channel.
 
 ```
-KEY                      TYPE             DEFAULT                  REQUIRED    DESCRIPTION
-SUB_BIND_ADDRESS         String           :35000
-SUB_NATS_URL             String           nats://localhost:4222
-SUB_CLUSTER_ID           String           test-cluster
-SUB_CLIENT_ID            String                                    true
-SUB_SUBJECT              String           lagermeister-test
-SUB_MATCH_SPEC           String
-SUB_STATS_ADDRESS        String           :34999
-SUB_LISTEN_COUNT         Integer          20
-SUB_LOGGING_LEVEL        String           info
-SUB_KEEPALIVE            True or False
-SUB_KEEPALIVEDURATION    Duration
+KEY                          TYPE             DEFAULT                  REQUIRED    DESCRIPTION
+TCPRCVR_BIND_ADDRESS         String           :35000
+TCPRCVR_NATS_URL             String           nats://localhost:4222
+TCPRCVR_CLUSTER_ID           String           test-cluster
+TCPRCVR_CLIENT_ID            String                                    true
+TCPRCVR_SUBJECT              String           lagermeister-test
+TCPRCVR_MATCH_SPEC           String
+TCPRCVR_STATS_ADDRESS        String           :34999
+TCPRCVR_LISTEN_COUNT         Integer          20
+TCPRCVR_LOGGING_LEVEL        String           info
+TCPRCVR_KEEPALIVE            True or False
+TCPRCVR_KEEPALIVEDURATION    Duration
 ```

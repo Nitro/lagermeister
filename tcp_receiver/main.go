@@ -229,11 +229,14 @@ func (t *TcpRelay) handleConnection(conn io.ReadCloser) {
 
 func main() {
 	var relay TcpRelay
-	if os.Args[1] == "--help" || os.Args[1] == "-h" {
-		envconfig.Usage("sub", &relay)
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		envconfig.Usage("tcprcvr", &relay)
 		os.Exit(1)
 	}
-	envconfig.Process("tcprcvr", &relay)
+	err := envconfig.Process("tcprcvr", &relay)
+	if err != nil {
+		log.Fatal(err);
+	}
 	relay.KeepAlive = true
 	relay.KeepAliveDuration = DefaultKeepAlive
 
@@ -244,7 +247,7 @@ func main() {
 	// Stats relay
 	go http.ListenAndServe(relay.StatsAddress, nil)
 
-	err := relay.Listen()
+	err = relay.Listen()
 	if err != nil {
 		log.Fatal(err)
 	}
