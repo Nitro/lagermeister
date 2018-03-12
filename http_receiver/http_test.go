@@ -176,5 +176,16 @@ func Test_HandleReceive(t *testing.T) {
 			So(string(body), ShouldBeEmpty)
 			So(mockConnection.LastMsg, ShouldBeNil)
 		})
+
+		Convey("refuses anything but POST messages", func() {
+			req := httptest.NewRequest("GET", "http://chaucer.example.com/health", nil)
+			relay.handleReceive(w, req)
+
+			resp := w.Result()
+			body, _ := ioutil.ReadAll(resp.Body)
+
+			So(resp.StatusCode, ShouldEqual, 405)
+			So(string(body), ShouldContainSubstring, "Expected POST")
+		})
 	})
 }

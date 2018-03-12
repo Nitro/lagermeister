@@ -86,6 +86,13 @@ func (h *HttpRelay) Relay() error {
 // the message broker for further processing.
 func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
+
+	if req.Method != "POST" {
+		http.Error(response, `{"status": "error", "message": "Invalid request action! Expected POST."}`, 405)
+		log.Warnf("Got request with action '%s', expected POST.", req.Method)
+		return
+	}
+
 	data, bytesRead, err := h.readAll(req.Body) // data is a pooled buffer!
 
 	// Make sure we put the buffer we got from readAll back in the pool!
@@ -131,7 +138,7 @@ func (h *HttpRelay) handleReceive(response http.ResponseWriter, req *http.Reques
 	}
 
 	if (msg.Payload == nil && len(msg.Fields) == 0) || msg.Hostname == nil {
-		log.Warnf("Missing fields! %s", msg.String())
+		log.Warnf("Missing fields in request from %s! %s", req.RemoteAddr, msg.String())
 		stats.Add("skipped", 1)
 		return
 	}
