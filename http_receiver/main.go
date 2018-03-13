@@ -6,13 +6,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/Nitro/lagermeister/message"
 	"github.com/Nitro/lagermeister/publisher"
-	log "github.com/sirupsen/logrus"
 	"github.com/gogo/protobuf/proto"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/oxtoacart/bpool"
+	log "github.com/sirupsen/logrus"
 	"gopkg.in/relistan/rubberneck.v1"
 )
 
@@ -26,12 +27,13 @@ var (
 )
 
 type HttpRelay struct {
-	Address   string `envconfig:"BIND_ADDRESS" default:":35001"`
-	NatsUrl   string `envconfig:"NATS_URL" default:"nats://localhost:4222"`
-	ClusterId string `envconfig:"CLUSTER_ID" default:"test-cluster"`
-	ClientId  string `envconfig:"CLIENT_ID" required:"true"`
-	Subject   string `envconfig:"SUBJECT" default:"lagermeister-test"`
-	MatchSpec string `envconfig:"MATCH_SPEC"` // Heka message matcher
+	Address         string        `envconfig:"BIND_ADDRESS" default:":35001"`
+	NatsUrl         string        `envconfig:"NATS_URL" default:"nats://localhost:4222"`
+	ClusterId       string        `envconfig:"CLUSTER_ID" default:"test-cluster"`
+	ClientId        string        `envconfig:"CLIENT_ID" required:"true"`
+	Subject         string        `envconfig:"SUBJECT" default:"lagermeister-test"`
+	MatchSpec       string        `envconfig:"MATCH_SPEC"` // Heka message matcher
+	ConnectHoldDown time.Duration `envconfig:"CONNECT_HOLD_DOWN" default:"10s"`
 
 	matcher    *message.MatcherSpecification
 	pool       *bpool.BytePool
@@ -52,11 +54,12 @@ func (h *HttpRelay) init() error {
 
 	if h.connection == nil { // We can provide our own (e.g. as a mock)
 		h.connection = &publisher.StanPublisher{
-			NatsUrl:   h.NatsUrl,
-			ClusterId: h.ClusterId,
-			ClientId:  h.ClientId,
-			Subject:   h.Subject,
-			Stats:     stats,
+			NatsUrl:         h.NatsUrl,
+			ClusterId:       h.ClusterId,
+			ClientId:        h.ClientId,
+			Subject:         h.Subject,
+			ConnectHoldDown: h.ConnectHoldDown,
+			Stats:           stats,
 		}
 		h.connection.Connect()
 	}

@@ -43,15 +43,16 @@ func configureLoggingLevel(level string) {
 }
 
 type TcpRelay struct {
-	Address      string `envconfig:"BIND_ADDRESS" default:":35000"`
-	NatsUrl      string `envconfig:"NATS_URL" default:"nats://localhost:4222"`
-	ClusterId    string `envconfig:"CLUSTER_ID" default:"test-cluster"`
-	ClientId     string `envconfig:"CLIENT_ID" required:"true"`
-	Subject      string `envconfig:"SUBJECT" default:"lagermeister-test"`
-	MatchSpec    string `envconfig:"MATCH_SPEC"` // Heka message matcher
-	StatsAddress string `envconfig:"STATS_ADDRESS" default:":34999"`
-	ListenCount  int    `envconfig:"LISTEN_COUNT" default:"20"`
-	LoggingLevel string `envconfig:"LOGGING_LEVEL" default:"info"`
+	Address         string        `envconfig:"BIND_ADDRESS" default:":35000"`
+	NatsUrl         string        `envconfig:"NATS_URL" default:"nats://localhost:4222"`
+	ClusterId       string        `envconfig:"CLUSTER_ID" default:"test-cluster"`
+	ClientId        string        `envconfig:"CLIENT_ID" required:"true"`
+	Subject         string        `envconfig:"SUBJECT" default:"lagermeister-test"`
+	MatchSpec       string        `envconfig:"MATCH_SPEC"` // Heka message matcher
+	StatsAddress    string        `envconfig:"STATS_ADDRESS" default:":34999"`
+	ListenCount     int           `envconfig:"LISTEN_COUNT" default:"20"`
+	LoggingLevel    string        `envconfig:"LOGGING_LEVEL" default:"info"`
+	ConnectHoldDown time.Duration `envconfig:"CONNECT_HOLD_DOWN" default:"10s"`
 
 	KeepAlive         bool
 	KeepAliveDuration time.Duration
@@ -66,11 +67,12 @@ func (t *TcpRelay) init() error {
 	t.pool = bpool.NewBytePool(DefaultPoolSize, DefaultPoolMemberSize)
 	// Set up the publisher, passing along the configuration
 	t.connection = &publisher.StanPublisher{
-		NatsUrl:   t.NatsUrl,
-		ClusterId: t.ClusterId,
-		ClientId:  t.ClientId,
-		Subject:   t.Subject,
-		Stats:     stats,
+		NatsUrl:         t.NatsUrl,
+		ClusterId:       t.ClusterId,
+		ClientId:        t.ClientId,
+		Subject:         t.Subject,
+		Stats:           stats,
+		ConnectHoldDown: t.ConnectHoldDown,
 	}
 	err := t.connection.Connect()
 	if err != nil {
@@ -235,7 +237,7 @@ func main() {
 	}
 	err := envconfig.Process("tcprcvr", &relay)
 	if err != nil {
-		log.Fatal(err);
+		log.Fatal(err)
 	}
 	relay.KeepAlive = true
 	relay.KeepAliveDuration = DefaultKeepAlive

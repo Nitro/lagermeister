@@ -3,14 +3,15 @@
 package publisher
 
 import (
+	"errors"
 	"expvar"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/Nitro/lagermeister/message"
-	log "github.com/sirupsen/logrus"
 	"github.com/nats-io/go-nats-streaming"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -31,16 +32,18 @@ type Publisher interface {
 // retries, and a circuit breaker that can be flipped while a connection
 // can't be established.
 type StanPublisher struct {
-	NatsUrl   string
-	ClusterId string
-	ClientId  string
-	Subject   string
-	Stats     *expvar.Map
+	NatsUrl         string
+	ClusterId       string
+	ClientId        string
+	Subject         string
+	Stats           *expvar.Map
+	ConnectHoldDown time.Duration
 
-	stanConn   stan.Conn
-	available  bool
-	availLock  sync.RWMutex
-	connectSem chan struct{}
+	stanConn    stan.Conn
+	available   bool
+	availLock   sync.RWMutex
+	connectSem  chan struct{}
+	lastConnect time.Time
 }
 
 // Connect is the main method, used to connect the StanPublisher to the
@@ -70,9 +73,21 @@ func (s *StanPublisher) connectStan() error {
 	case semaphore := <-s.connectSem:
 		defer func() { s.connectSem <- semaphore }() // Release the semaphore when we're done
 
+		if time.Now().UTC().Sub(s.lastConnect) < s.ConnectHoldDown {
+			return errors.New("Too soon to reconnect to NATS, punting")
+		}
+		s.lastConnect = time.Now().UTC()
+
 		log.Infof("Attempting to connect to NATS streaming: %s clusterID=[%s] clientID=[%s]",
 			s.NatsUrl, s.ClusterId, s.ClientId,
 		)
+
+		// Free any pre-existing connection
+		if s.lastConnect.IsZero() {
+			s.stanConn.NatsConn().Close()
+			s.stanConn.Close()
+		}
+
 		s.stanConn, err = stan.Connect(
 			s.ClusterId, s.ClientId, stan.NatsURL(s.NatsUrl),
 			stan.ConnectWait(2*time.Second),
@@ -82,9 +97,10 @@ func (s *StanPublisher) connectStan() error {
 			// A ton of failures seem to derive from the Cluster ID not matching on
 			// connect. The error reported up from the stan package is not very
 			// helpful.
-			return fmt.Errorf("Connecting to NATS streaming: %s", err)
+			return fmt.Errorf("Error connecting to NATS streaming: %s", err)
 		}
 
+		log.Info("Connected to NATS streaming successfully")
 		s.BreakerOff()
 	default:
 	}
@@ -98,9 +114,15 @@ func (s *StanPublisher) connectStan() error {
 // connection.
 func (s *StanPublisher) BreakerOn() {
 	s.availLock.Lock()
+	defer s.availLock.Unlock()
+
+	// If we're already flipped, let's not announce it again
+	if !s.available {
+		return
+	}
+
 	s.available = false
 	log.Warn("Turning circuit breaker on!")
-	s.availLock.Unlock()
 }
 
 // BreakerOff flips the circuit breaker to off so that we can process any new
@@ -132,30 +154,28 @@ func (s *StanPublisher) RelayMessage(msg *message.Message) {
 	}
 
 	for i, sleepTime := range publishRetries {
-		if s.stanConn == nil {
-			log.Warn("Reconnecting to NATS")
-			err = s.connectStan()
-			if err != nil || !s.IsAvailable() {
-				log.Warnf("Retrying #%d publishing to NATS", i)
-				time.Sleep(time.Duration(sleepTime) * time.Millisecond)
-				continue
-			}
-		}
-
 		err = s.stanConn.Publish(s.Subject, data)
 		if err == nil {
 			s.Stats.Add("publishedCount", 1)
 			break
 		}
 
+		// We only get here if something went wrong publishing
 		s.BreakerOn()
 
 		if err == stan.ErrConnectionClosed || err == stan.ErrBadConnection ||
 			err == stan.ErrTimeout {
 
 			s.Stats.Add("retryCount", 1)
-			log.Warnf("Retrying #%d publishing to NATS", i)
+			log.Warnf("Retrying #%d publishing to NATS, got %s", i, err)
 			s.stanConn.Close()
+
+			err = s.connectStan()
+			if err != nil || !s.IsAvailable() {
+				log.Warnf("Retrying #%d publishing to NATS", i)
+				time.Sleep(time.Duration(sleepTime) * time.Millisecond)
+				continue
+			}
 
 			continue
 		}
