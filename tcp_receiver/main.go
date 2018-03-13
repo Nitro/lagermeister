@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	DefaultPoolSize       = 100
-	DefaultPoolMemberSize = 22 * 1024
+	DefaultPoolSize       = 100       // 100 in the default pool
+	DefaultPoolMemberSize = 10 * 1024 // 10KB buffers
 	DefaultKeepAlive      = 30 * time.Second
 )
 
@@ -141,12 +141,15 @@ func (t *TcpRelay) handleConnection(conn io.ReadCloser) {
 	stream := NewStreamTracker(t.pool) // Allocate a StreamTracker and get buffer from pool
 	defer stream.CleanUp()             // Return buffer to pool when we're done
 
+	var keepProcessing, finished bool
+	var msg *message.Message
+
 	for {
 		log.Debug("---------------------")
 		var err error
 
 		// Try to read from the stream and deal with the result
-		keepProcessing, finished := stream.Read(conn)
+		keepProcessing, finished = stream.Read(conn)
 		if finished {
 			break
 		}
@@ -209,7 +212,7 @@ func (t *TcpRelay) handleConnection(conn io.ReadCloser) {
 		}
 
 		// This has to happen before cleaning up the buffer.
-		msg := stream.GetMessage()
+		msg = stream.GetMessage()
 		if t.matcher == nil || t.matcher.Match(msg) {
 			// XXX we can substantially improve performance by handling
 			// message relaying in a thread pool instead of on the main
