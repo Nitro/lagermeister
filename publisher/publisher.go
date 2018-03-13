@@ -26,6 +26,7 @@ type Publisher interface {
 	BreakerOff()
 	IsAvailable() bool
 	RelayMessage(*message.Message)
+	Shutdown()
 }
 
 // A StanPublisher is a NATS Publisher with connection management,
@@ -183,4 +184,9 @@ func (s *StanPublisher) RelayMessage(msg *message.Message) {
 		log.Errorf("Publishing: %s", err)
 		s.Stats.Add("errorCount", 1)
 	}
+}
+
+// Shutdown will clean up after the publisher and close open connections
+func (s *StanPublisher) Shutdown() {
+	s.stanConn.Close()
 }

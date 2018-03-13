@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Nitro/lagermeister/message"
@@ -232,6 +234,26 @@ func (t *TcpRelay) handleConnection(conn io.ReadCloser) {
 	conn.Close()
 }
 
+// Set up some signal handling for kill/term/int and try to disconnect
+// NATS client
+func handleSignals(relay *TcpRelay) {
+	sigChan := make(chan os.Signal, 1) // Buffered!
+
+	// Grab some signals we want to catch where possible
+	signal.Notify(sigChan, os.Interrupt)
+	signal.Notify(sigChan, os.Kill)
+	signal.Notify(sigChan, syscall.SIGTERM)
+
+	sig := <-sigChan
+	log.Warnf("Received signal '%s', attempting clean shutdown", sig)
+
+	relay.connection.Shutdown()
+	time.Sleep(1 * time.Second) // Wait for it to close the connections
+
+	log.Info("Shut down.")
+	os.Exit(130) // Ctrl-C received or equivalent
+}
+
 func main() {
 	var relay TcpRelay
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
@@ -256,6 +278,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	handleSignals(&relay)
 
 	select {}
 }

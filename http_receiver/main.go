@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Nitro/lagermeister/message"
@@ -201,6 +203,26 @@ func (h *HttpRelay) readAll(r io.Reader) (b []byte, bytesRead int, err error) {
 	return buf, bytesRead, nil
 }
 
+// Set up some signal handling for kill/term/int and try to disconnect
+// NATS client
+func handleSignals(relay *HttpRelay) {
+	sigChan := make(chan os.Signal, 1) // Buffered!
+
+	// Grab some signals we want to catch where possible
+	signal.Notify(sigChan, os.Interrupt)
+	signal.Notify(sigChan, os.Kill)
+	signal.Notify(sigChan, syscall.SIGTERM)
+
+	sig := <-sigChan
+	log.Warnf("Received signal '%s', attempting clean shutdown", sig)
+
+	relay.connection.Shutdown()
+	time.Sleep(1 * time.Second) // Wait for it to close the connections
+
+	log.Info("Shut down.")
+	os.Exit(130) // Ctrl-C received or equivalent
+}
+
 func main() {
 	var relay HttpRelay
 
@@ -216,6 +238,7 @@ func main() {
 
 	rubberneck.Print(relay)
 
+	handleSignals(&relay)
 	err = relay.Relay()
 	if err != nil {
 		log.Fatal(err.Error())

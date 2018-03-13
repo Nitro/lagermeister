@@ -30,3 +30,5 @@ func (m *MockPublisher) RelayMessage(msg *message.Message) {
 	m.RelayedCount += 1
 	m.LastMsg = msg
 }
+
+func (m *MockPublisher) Shutdown() {}
