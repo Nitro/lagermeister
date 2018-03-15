@@ -43,7 +43,12 @@ tcp_receiver/tcp_receiver
 http_receiver/http_receiver
 *.tar.gz
 *.tgz
+
+# Go build files
 stats_proxy/stats_proxy
 stats_proxy/generator/generator
 log_generator/log_generator
 http_subscriber/http_subscriber
+
+# Go vendor
+vendor/
