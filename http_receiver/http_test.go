@@ -11,7 +11,7 @@ import (
 	"github.com/Nitro/lagermeister/message"
 	"github.com/Nitro/lagermeister/publisher"
 	log "github.com/sirupsen/logrus"
-	. "github.com/SmartyStreets/goconvey/convey"
+	. "github.com/smartystreets/goconvey/convey"
 )
 
 func Test_HealthCheck(t *testing.T) {

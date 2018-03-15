@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	. "github.com/SmartyStreets/goconvey/convey"
+	. "github.com/smartystreets/goconvey/convey"
 	"github.com/oxtoacart/bpool"
 )
 

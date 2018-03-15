@@ -7,7 +7,7 @@ import (
 
 	"github.com/Nitro/lagermeister/publisher"
 	log "github.com/sirupsen/logrus"
-	. "github.com/SmartyStreets/goconvey/convey"
+	. "github.com/smartystreets/goconvey/convey"
 )
 
 func Test_init(t *testing.T) {
