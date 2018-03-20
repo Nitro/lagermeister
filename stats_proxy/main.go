@@ -114,7 +114,7 @@ func main() {
 	mgr.Run()
 
 	nc.Subscribe(config.SubChannel, func(m *nats.Msg) {
-		fmt.Printf("Received a message: %s\n", string(m.Data))
+		log.Debugf("Received a message: %s\n", string(m.Data))
 		// The manager will fan this out to all the live connections if there are any
 		mgr.Publish(m.Data)
 	})
