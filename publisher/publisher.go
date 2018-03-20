@@ -91,7 +91,7 @@ func (s *StanPublisher) connectStan() error {
 
 		s.stanConn, err = stan.Connect(
 			s.ClusterId, s.ClientId, stan.NatsURL(s.NatsUrl),
-			stan.ConnectWait(2*time.Second),
+			stan.ConnectWait(5*time.Second),
 			stan.PubAckWait(3*time.Second),
 		)
 		if err != nil {

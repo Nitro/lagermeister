@@ -90,7 +90,11 @@ func NewLogFollower() *LogFollower {
 func (f *LogFollower) Connect() error {
 	var err error
 
-	f.stanConn, err = stan.Connect(f.ClusterId, f.ClientId, stan.NatsURL(f.NatsUrl))
+	f.stanConn, err = stan.Connect(
+		f.ClusterId, f.ClientId,
+		stan.NatsURL(f.NatsUrl),
+		stan.ConnectWait(5*time.Second),
+	)
 	if err != nil {
 		return fmt.Errorf(
 			"Can't connect: %v.\nMake sure a NATS Streaming Server is running at: %s",
