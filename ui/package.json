@@ -23,7 +23,7 @@
     "@types/lodash": "^4.14.76",
     "core-js": "^2.4.1",
     "lodash": "^4.17.4",
-    "ng2-google-charts": "^3.2.0",
+    "ng2-google-charts": "~3.2.0",
     "rxjs": "^5.0.1",
     "ts-helpers": "^1.1.1",
     "websocket-nats": "^0.3.3",
