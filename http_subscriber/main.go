@@ -48,7 +48,7 @@ var (
 // log messages as they are received.
 type LogFollower struct {
 	ClusterId    string        `envconfig:"CLUSTER_ID" default:"test-cluster"`
-	ClientId     string        `envconfig:"CLIENT_ID"`
+	ClientId     string        `envconfig:"CLIENT_ID" required:"true"`
 	StartSeq     uint64        `envconfig:"START_SEQ"`
 	StartDelta   string        `envconfig:"START_DELTA"`
 	DeliverAll   bool          `envconfig:"DELIVER_ALL"`
@@ -57,7 +57,7 @@ type LogFollower struct {
 	Qgroup       string        `envconfig:"QGROUP"`
 	Unsubscribe  bool          `envconfig:"UNSUBSCRIBE"`
 	NatsUrl      string        `envconfig:"NATS_URL" default:"nats://localhost:4222"`
-	Subject      string        `envconfig:"SUBJECT"`
+	Subject      string        `envconfig:"SUBJECT" required:"true"`
 	StubHttp     bool          `envconfig:"STUB_HTTP" default:"false"`
 	RemoteUrl    string        `envconfig:"REMOTE_URL" required:"true"`
 	LoggingLevel string        `envconfig:"LOGGING_LEVEL" default:"info"`
@@ -376,13 +376,6 @@ func main() {
 	// Don't let people confuse this for a boolean option
 	if follower.Durable == "false" || follower.Durable == "true" {
 		log.Fatalf("Invalid durable queue name: %s. This is not a boolean option.", follower.Durable)
-	}
-
-	if follower.ClientId == "" {
-		log.Fatalf("Error: A unique client ID must be specified.")
-	}
-	if follower.Subject == "" {
-		log.Fatalf("Error: A subject must be specified.")
 	}
 
 	err = follower.Connect()
