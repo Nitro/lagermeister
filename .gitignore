@@ -3,6 +3,7 @@
 # compiled output
 /dist
 /tmp
+/bin
 
 # dependencies
 /node_modules
@@ -49,6 +50,7 @@ stats_proxy/stats_proxy
 stats_proxy/generator/generator
 log_generator/log_generator
 http_subscriber/http_subscriber
+ui_server/ui_server
 
 # Go vendor
 vendor/

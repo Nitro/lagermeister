@@ -1,4 +1,4 @@
-ALL_BINS=http_receiver/http_receiver http_subscriber/http_subscriber log_generator/log_generator stats_proxy/stats_proxy tcp_receiver/tcp_receiver
+ALL_BINS=http_receiver/http_receiver http_subscriber/http_subscriber log_generator/log_generator stats_proxy/stats_proxy tcp_receiver/tcp_receiver ui_server/ui_server
 
 all: $(ALL_BINS)
 	mkdir -p bin
@@ -19,9 +19,13 @@ stats_proxy/stats_proxy:
 tcp_receiver/tcp_receiver:
 	cd tcp_receiver && go build
 
+ui_server/ui_server:
+	cd ui_server && go build
+
 clean:
 	rm -f http_receiver/http_receiver
 	rm -f http_subscriber/http_subscriber
 	rm -f log_generator/log_generator
 	rm -f stats_proxy/stats_proxy
 	rm -f tcp_receiver/tcp_receiver
+	rm -f ui_server/ui_server
