@@ -2,10 +2,15 @@
 
 Hackweek project by Karl and Paul
 
-## Code scaffolding
+## Local Development
 
-Run `ng generate component component-name` to generate a new component. You can also use `ng generate directive/pipe/service/class/module`.
+Run `ng serve` to serve the application for development 
 
-## Build
+## Building
 
-Run `ng build` to build the project. The build artifacts will be stored in the `dist/` directory. Use the `-prod` flag for a production build.
+Run `ng build` to build the project. The build artifacts will be stored in the `dist/` directory. 
+Use the `-prod` flag for a production build.
+
+## Server
+
+Run `npm run start:server` to serve the dist/ files on port 8081.
