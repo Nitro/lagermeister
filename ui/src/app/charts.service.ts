@@ -7,7 +7,7 @@ import * as _ from "lodash";
 @Injectable()
 export class ChartsService {
 
-    hostAddress: string = 'localhost:9010';
+    hostAddress: string = window.location.hostname + ':9010';
     chartConfig: any = '';
     chartDataSubject: Subject<any> = new Subject<any>();
 
