@@ -267,7 +267,8 @@ func main() {
 	relay.KeepAlive = true
 	relay.KeepAliveDuration = DefaultKeepAlive
 
-	rubberneck.PrintWithLabel("tcp_receiver settings", relay)
+	printer := rubberneck.NewPrinter(log.Infof, rubberneck.AddLineFeed)
+	printer.PrintWithLabel("tcp_receiver settings", relay)
 
 	configureLoggingLevel(relay.LoggingLevel)
 
