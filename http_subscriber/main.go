@@ -10,13 +10,12 @@ import (
 
 	"github.com/Nitro/lagermeister/event"
 	"github.com/Nitro/lagermeister/message"
-	log "github.com/sirupsen/logrus"
 	"github.com/gogo/protobuf/proto"
+	"github.com/kelseyhightower/envconfig"
 	"github.com/nats-io/go-nats-streaming"
 	"github.com/nats-io/go-nats-streaming/pb"
 	"github.com/oxtoacart/bpool"
-	"github.com/pquerna/ffjson/ffjson"
-	"github.com/kelseyhightower/envconfig"
+	log "github.com/sirupsen/logrus"
 	"gopkg.in/relistan/rubberneck.v1"
 )
 
@@ -27,6 +26,11 @@ const (
 	CheckTime          = 5 * time.Second  // Check the NATS connection
 	PosterPoolSize     = 25               // HTTP posters
 	DefaultHttpTimeout = 10 * time.Second // When posting to e.g. Sumologic
+)
+
+var (
+	defaultFields  = []string{"Uuid", "Timestamp", "Type", "Logger", "Severity", "Payload", "Pid", "Hostname"}
+	printer *PrintMessageHandler
 )
 
 type MessageHandler interface {
@@ -40,34 +44,32 @@ func (p *PrintMessageHandler) HandleMessage(m *stan.Msg, i int) error {
 	return nil
 }
 
-var (
-	printer *PrintMessageHandler
-)
-
 // LogFollower attaches to a subject on NATS streaming and processes new
 // log messages as they are received.
 type LogFollower struct {
-	ClusterId    string        `envconfig:"CLUSTER_ID" default:"test-cluster"`
-	ClientId     string        `envconfig:"CLIENT_ID" required:"true"`
-	StartSeq     uint64        `envconfig:"START_SEQ"`
-	StartDelta   string        `envconfig:"START_DELTA"`
-	DeliverAll   bool          `envconfig:"DELIVER_ALL"`
-	DeliverLast  bool          `envconfig:"DELIVER_LAST"`
-	Durable      string        `envconfig:"DURABLE"`
-	Qgroup       string        `envconfig:"QGROUP"`
-	Unsubscribe  bool          `envconfig:"UNSUBSCRIBE"`
-	NatsUrl      string        `envconfig:"NATS_URL" default:"nats://localhost:4222"`
-	Subject      string        `envconfig:"SUBJECT" required:"true"`
-	StubHttp     bool          `envconfig:"STUB_HTTP" default:"false"`
-	RemoteUrl    string        `envconfig:"REMOTE_URL" required:"true"`
-	LoggingLevel string        `envconfig:"LOGGING_LEVEL" default:"info"`
-	BatchTimeout time.Duration `envconfig:"BATCH_TIMEOUT" default:"10s"`
+	ClusterId     string        `envconfig:"CLUSTER_ID" default:"test-cluster"`
+	ClientId      string        `envconfig:"CLIENT_ID" required:"true"`
+	StartSeq      uint64        `envconfig:"START_SEQ"`
+	StartDelta    string        `envconfig:"START_DELTA"`
+	DeliverAll    bool          `envconfig:"DELIVER_ALL"`
+	DeliverLast   bool          `envconfig:"DELIVER_LAST"`
+	Durable       string        `envconfig:"DURABLE"`
+	Qgroup        string        `envconfig:"QGROUP"`
+	Unsubscribe   bool          `envconfig:"UNSUBSCRIBE"`
+	NatsUrl       string        `envconfig:"NATS_URL" default:"nats://localhost:4222"`
+	Subject       string        `envconfig:"SUBJECT" required:"true"`
+	StubHttp      bool          `envconfig:"STUB_HTTP" default:"false"`
+	RemoteUrl     string        `envconfig:"REMOTE_URL" required:"true"`
+	LoggingLevel  string        `envconfig:"LOGGING_LEVEL" default:"info"`
+	BatchTimeout  time.Duration `envconfig:"BATCH_TIMEOUT" default:"10s"`
+	Fields        []string      `envconfig:"FIELDS"`
+	DynamicFields []string      `envconfig:"DYNAMIC_FIELDS"`
 
 	stanConn       stan.Conn
 	subscription   stan.Subscription
 	batchedRecords chan *message.Message
 	lastSent       time.Time
-	outPool        *bpool.BytePool
+	outPool        *bpool.BufferPool
 	quitChan       chan struct{}
 	startOpt       stan.SubscriptionOption
 	poster         *HttpMessagePoster
@@ -79,10 +81,11 @@ type LogFollower struct {
 func NewLogFollower() *LogFollower {
 	return &LogFollower{
 		batchedRecords: make(chan *message.Message, BatchSize),
-		outPool:        bpool.NewBytePool(2, OutRecordSize),
+		outPool:        bpool.NewBufferPool(2),
 		quitChan:       make(chan struct{}),
 		lastSeenTime:   time.Unix(0, 0),
 		lastWallTime:   time.Unix(0, 0),
+		Fields:         defaultFields,
 	}
 }
 
@@ -128,8 +131,6 @@ func (f *LogFollower) manageConnection() {
 // it to the remote service. It will time out waiting on a new batch after
 // BatchTimeout.
 func (f *LogFollower) SendBatch() {
-	var startRec int
-
 	data := f.outPool.Get()
 	defer f.outPool.Put(data)
 
@@ -137,14 +138,6 @@ func (f *LogFollower) SendBatch() {
 	if len(f.batchedRecords) < 1 {
 		return
 	}
-
-	// Release all the buffers we collect
-	freeChan := make(chan []byte)
-	go func() {
-		for buf := range freeChan {
-			ffjson.Pool(buf)
-		}
-	}()
 
 	// We try to get a completed batch to send. If one isn't there, we
 	// give up after BatchTimeout.
@@ -158,35 +151,19 @@ func (f *LogFollower) SendBatch() {
 			break
 		}
 
-		buf, err := ffjson.Marshal(rec)
+		// TODO do we need to handle a partial encoding here?
+		_, err := message.ESJsonEncode(rec, data, f.Fields, f.DynamicFields, nil) // Use default mappings
 		if err != nil {
 			log.Errorf("Error encoding record: %s", err)
 			continue
 		}
-
-		if startRec+len(buf) > len(data) {
-			log.Warnf("Batch buffer size exceeded!")
-			f.send(data[:startRec])
-			return
-		}
-
-		copy(data[startRec:], buf)
-		startRec += len(buf)
-		data[startRec] = '\n'
-		startRec += 1
 
 		// Track the last actual time we saw an event (for lag calculation)
 		now := time.Now().UTC()
 		if f.lastWallTime.Before(now) {
 			f.lastWallTime = now
 		}
-
-		// Queue up a buffer for freeing
-		freeChan <- buf
 	}
-
-	// Release the goroutine managing this pool
-	close(freeChan)
 
 	// Track the last timestamp we saw (for lag calculation)
 	recTime := time.Unix(*rec.Timestamp/1e9, 0)
@@ -194,7 +171,7 @@ func (f *LogFollower) SendBatch() {
 		f.lastSeenTime = recTime
 	}
 
-	f.send(data[:startRec])
+	f.send(data.Bytes())
 }
 
 // reportLag runs in the background and reports a lag metric to the stats
@@ -348,28 +325,21 @@ func configureLoggingLevel(level string) {
 }
 
 func main() {
-	log.SetLevel(log.InfoLevel)
-
 	printer = &PrintMessageHandler{}
-
-	var follower LogFollower
-
-	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
-		envconfig.Usage("sub", &follower)
-		os.Exit(1)
-	}
+	follower := NewLogFollower()
 
 	err := envconfig.Process("sub", &follower)
 	if err != nil {
 		log.Fatalf("Processing config: %s", err)
 	}
 
-	rubberneck.Print(follower)
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		envconfig.Usage("sub", &follower)
+		os.Exit(1)
+	}
 
-	follower.batchedRecords = make(chan *message.Message, BatchSize)
-	follower.outPool = bpool.NewBytePool(2, OutRecordSize)
-	follower.quitChan = make(chan struct{})
 	configureLoggingLevel(follower.LoggingLevel)
+	rubberneck.Print(follower)
 
 	if follower.StubHttp {
 		follower.poster = NewStubHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout)

@@ -12,7 +12,7 @@ import (
 func Test_ESJsonEncode(t *testing.T) {
 	Convey("ESJsonEncode", t, func() {
 		m := getTestMessageWithFunnyFields()
-		buf := bytes.Buffer{}
+		buf := &bytes.Buffer{}
 		fields := []string{
 			"uuid", "timestamp", "type", "logger", "severity", "payload", "pid", "hostname",
 		}

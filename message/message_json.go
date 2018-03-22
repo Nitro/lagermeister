@@ -61,7 +61,7 @@ type ESFieldMappings struct {
 
 // ESJsonEncode generates ElasticSearch/Logstash compatible JSON messages.
 // Unlike the upstream Heka version, this does NOT handle binary blobs.
-func ESJsonEncode(m *Message, buf bytes.Buffer, fields, dynamicFields []string, mappings *ESFieldMappings) (output []byte, err error) {
+func ESJsonEncode(m *Message, buf *bytes.Buffer, fields, dynamicFields []string, mappings *ESFieldMappings) (output []byte, err error) {
 	// Use the default field mappings unless we're configured otherwise
 	if mappings == nil {
 		mappings = &defaultFieldMappings
@@ -74,24 +74,24 @@ func ESJsonEncode(m *Message, buf bytes.Buffer, fields, dynamicFields []string, 
 		first := buf.Len() == bufLenBeforeFirstField
 		switch strings.ToLower(f) {
 		case "uuid":
-			writeStringField(first, &buf, mappings.Uuid, m.GetUuidString())
+			writeStringField(first, buf, mappings.Uuid, m.GetUuidString())
 		case "timestamp":
 			t := time.Unix(0, m.GetTimestamp()).UTC()
-			writeStringField(first, &buf, mappings.Timestamp, gostrftime.Strftime("%Y-%m-%dT%H:%M:%S", t))
+			writeStringField(first, buf, mappings.Timestamp, gostrftime.Strftime("%Y-%m-%dT%H:%M:%S", t))
 		case "type":
-			writeStringField(first, &buf, mappings.Type, m.GetType())
+			writeStringField(first, buf, mappings.Type, m.GetType())
 		case "logger":
-			writeStringField(first, &buf, mappings.Logger, m.GetLogger())
+			writeStringField(first, buf, mappings.Logger, m.GetLogger())
 		case "severity":
-			writeIntField(first, &buf, mappings.Severity, m.GetSeverity())
+			writeIntField(first, buf, mappings.Severity, m.GetSeverity())
 		case "payload":
-			writeStringField(first, &buf, mappings.Payload, m.GetPayload())
+			writeStringField(first, buf, mappings.Payload, m.GetPayload())
 		case "envversion":
-			writeStringField(first, &buf, mappings.EnvVersion, m.GetEnvVersion())
+			writeStringField(first, buf, mappings.EnvVersion, m.GetEnvVersion())
 		case "pid":
-			writeIntField(first, &buf, mappings.Pid, m.GetPid())
+			writeIntField(first, buf, mappings.Pid, m.GetPid())
 		case "hostname":
-			writeStringField(first, &buf, mappings.Hostname, m.GetHostname())
+			writeStringField(first, buf, mappings.Hostname, m.GetHostname())
 		case "dynamicfields":
 			listsDynamicFields := len(dynamicFields) > 0
 
@@ -109,7 +109,7 @@ func ESJsonEncode(m *Message, buf bytes.Buffer, fields, dynamicFields []string, 
 
 				if dynamicFieldMatch {
 					raw := false
-					writeField(first, &buf, field, raw, ".")
+					writeField(first, buf, field, raw, ".")
 				}
 			}
 		default:
