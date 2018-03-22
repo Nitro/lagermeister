@@ -149,7 +149,6 @@ const yyErrCode = 2
 const yyInitialStackSize = 16
 
 //line message_matcher_parser.y:191
-
 type MatcherSpecificationParser struct {
 	spec     string
 	sym      string
