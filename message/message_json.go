@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mozilla-services/heka/build/heka/src/github.com/cactus/gostrftime"
+	"github.com/cactus/gostrftime"
 )
 
 const lowerhex = "0123456789abcdef"

@@ -2,6 +2,12 @@
 
 
 [[projects]]
+  name = "github.com/cactus/gostrftime"
+  packages = ["."]
+  revision = "b8b45cd4d6faa3d8bca9b6a0826520d84b354e8c"
+  version = "v1.0"
+
+[[projects]]
   name = "github.com/gogo/protobuf"
   packages = [
     "gogoproto",
@@ -144,6 +150,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "9073b0698dc35d0abe38e401b4e62addb5b6a36925a812ba924cc30f8bc3e264"
+  inputs-digest = "7a9ff6792d324f09612a78fa40603a09803b7e6eb93a482b8f922e9d7622d7fb"
   solver-name = "gps-cdcl"
   solver-version = 1
