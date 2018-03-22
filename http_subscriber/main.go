@@ -328,7 +328,7 @@ func main() {
 	printer = &PrintMessageHandler{}
 	follower := NewLogFollower()
 
-	err := envconfig.Process("sub", &follower)
+	err := envconfig.Process("sub", follower)
 	if err != nil {
 		log.Fatalf("Processing config: %s", err)
 	}
