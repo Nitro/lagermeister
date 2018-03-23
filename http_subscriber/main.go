@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	defaultFields  = []string{
+	defaultFields = []string{
 		"Uuid", "Timestamp", "Type", "Logger",
 		"Severity", "Payload", "Pid", "Hostname",
 		"DynamicFields", // Allow dynamically added fields to pass through
@@ -215,8 +215,6 @@ func (f *LogFollower) sendLagMetric() {
 
 func (f *LogFollower) send(buf []byte) {
 	f.poster.Post(buf)
-	// TODO remove this when debugging is complete!
-	// ioutil.WriteFile("out.json", buf, 0644)
 }
 
 // BatchRecord adds a record to the batch channel after Unmarshaling it from
@@ -291,7 +289,25 @@ func (f *LogFollower) Follow() error {
 
 	go f.reportLag()
 
+	go f.manageBatchTimeout()
+
 	return nil
+}
+
+// manageBatchTimeout will make sure that we don't keep anything in the
+// batch for longer than BatchTimeout so that slow loggers don't delay
+// messages for ages.
+func (f *LogFollower) manageBatchTimeout() {
+	for {
+		select {
+		case <-f.quitChan:
+			break
+		case <-time.After(f.BatchTimeout):
+			if time.Now().UTC().Sub(f.lastSeenTime) > f.BatchTimeout {
+				f.SendBatch()
+			}
+		}
+	}
 }
 
 // Unfollow stops following the logs
@@ -386,6 +402,9 @@ func main() {
 	go serveHttp()
 
 	<-signalChan
+	// Make sure we flush anything we were holding on to in memory
+	follower.SendBatch()
+
 	log.Warnf("\nReceived an interrupt, unsubscribing and closing connection...\n\n")
 	// Do not unsubscribe a durable on exit, except if asked to.
 	if follower.Durable == "" || follower.Unsubscribe {
