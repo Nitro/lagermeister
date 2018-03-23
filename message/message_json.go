@@ -93,17 +93,19 @@ func ESJsonEncode(m *Message, buf *bytes.Buffer, fields, dynamicFields []string,
 		case "hostname":
 			writeStringField(first, buf, mappings.Hostname, m.GetHostname())
 		case "dynamicfields":
-			listsDynamicFields := len(dynamicFields) > 0
+			whitelistedDynamicFields := len(dynamicFields) > 0
 
 			for _, field := range m.Fields {
 				dynamicFieldMatch := false
-				if listsDynamicFields {
+				// If we specified a list of dynamic fields, only use those
+				if whitelistedDynamicFields {
 					for _, fieldName := range dynamicFields {
 						if *field.Name == fieldName {
 							dynamicFieldMatch = true
 						}
 					}
 				} else {
+					// Otherwise we send all the dynamic fields
 					dynamicFieldMatch = true
 				}
 

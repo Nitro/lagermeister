@@ -27,7 +27,7 @@ func Test_ESJsonEncode(t *testing.T) {
 			)
 		})
 
-		Convey("handles some funny fields properly", func() {
+		Convey("handles some funny fields and dynamic fields properly", func() {
 			fields = append(fields, "dynamicFields")
 			dynamicFields := []string{
 				"integerArray", "doubleArray", "test.dotted.field.name.string",

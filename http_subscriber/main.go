@@ -29,7 +29,11 @@ const (
 )
 
 var (
-	defaultFields  = []string{"Uuid", "Timestamp", "Type", "Logger", "Severity", "Payload", "Pid", "Hostname"}
+	defaultFields  = []string{
+		"Uuid", "Timestamp", "Type", "Logger",
+		"Severity", "Payload", "Pid", "Hostname",
+		"DynamicFields", // Allow dynamically added fields to pass through
+	}
 	printer *PrintMessageHandler
 )
 
@@ -63,7 +67,7 @@ type LogFollower struct {
 	LoggingLevel  string        `envconfig:"LOGGING_LEVEL" default:"info"`
 	BatchTimeout  time.Duration `envconfig:"BATCH_TIMEOUT" default:"10s"`
 	Fields        []string      `envconfig:"FIELDS"`
-	DynamicFields []string      `envconfig:"DYNAMIC_FIELDS"`
+	DynamicFields []string      `envconfig:"DYNAMIC_FIELDS"` // Whitelist which dynamic fields we pass
 
 	stanConn       stan.Conn
 	subscription   stan.Subscription
