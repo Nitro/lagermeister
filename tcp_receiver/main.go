@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/Nitro/lagermeister/event"
 	"github.com/Nitro/lagermeister/message"
 	"github.com/Nitro/lagermeister/publisher"
 	"github.com/kelseyhightower/envconfig"
@@ -26,7 +28,8 @@ const (
 )
 
 var (
-	stats = expvar.NewMap("stats")
+	stats     = expvar.NewMap("stats")
+	sentCount = int64(0)
 )
 
 func configureLoggingLevel(level string) {
@@ -59,10 +62,12 @@ type TcpRelay struct {
 	KeepAlive         bool
 	KeepAliveDuration time.Duration
 
-	pool        *bpool.BytePool
-	matcher     *message.MatcherSpecification
-	connection  publisher.Publisher
-	initialized bool
+	pool           *bpool.BytePool
+	matcher        *message.MatcherSpecification
+	connection     publisher.Publisher
+	initialized    bool
+	quitChan       chan struct{}
+	MetricReporter *event.MetricReporter
 }
 
 func (t *TcpRelay) init() error {
@@ -81,6 +86,7 @@ func (t *TcpRelay) init() error {
 		return fmt.Errorf("Error starting NATS connection: %s", err)
 	}
 
+	t.quitChan = make(chan struct{})
 	t.initialized = true
 
 	return nil
@@ -105,6 +111,11 @@ func (t *TcpRelay) Listen() error {
 	for i := 0; i < t.ListenCount; i++ {
 		go func() {
 			for {
+				select {
+				case <-t.quitChan:
+					break
+				default:
+				}
 				conn, err := listener.Accept()
 				if err != nil {
 					log.Errorf("Error accepting connection! (%s)", err)
@@ -198,6 +209,7 @@ func (t *TcpRelay) handleConnection(conn io.ReadCloser) {
 
 		// We got the whole thing, so count it
 		stats.Add("receivedCount", 1)
+		atomic.AddInt64(&sentCount, 1)
 
 		ok, err := stream.ParseMessage()
 		if err != nil {
@@ -234,9 +246,35 @@ func (t *TcpRelay) handleConnection(conn io.ReadCloser) {
 	conn.Close()
 }
 
+// reportLag runs in the background and reports a lag metric to the stats
+// system.
+func (t *TcpRelay) reportThroughput() {
+	for {
+		select {
+		case <-time.After(1 * time.Second):
+			t.sendThroughputMetric()
+		case <-t.quitChan:
+			return
+		}
+	}
+}
+
+func (t *TcpRelay) sendThroughputMetric() {
+	count := atomic.SwapInt64(&sentCount, 0)
+
+	if t.MetricReporter != nil {
+		t.MetricReporter.TrySendMetrics(&event.MetricEvent{
+			Timestamp:  time.Now().UTC().Unix(),
+			Value:      float64(count),
+			Sender:     "tcp-receiver", // TODO make this configurable
+			MetricType: "Throughput",
+		})
+	}
+}
+
 // Set up some signal handling for kill/term/int and try to disconnect
 // NATS client
-func handleSignals(relay *TcpRelay) {
+func handleSignals(t *TcpRelay) {
 	sigChan := make(chan os.Signal, 1) // Buffered!
 
 	// Grab some signals we want to catch where possible
@@ -247,7 +285,9 @@ func handleSignals(relay *TcpRelay) {
 	sig := <-sigChan
 	log.Warnf("Received signal '%s', attempting clean shutdown", sig)
 
-	relay.connection.Shutdown()
+	close(t.quitChan)
+	t.quitChan = nil
+	t.connection.Shutdown()
 	time.Sleep(1 * time.Second) // Wait for it to close the connections
 
 	log.Info("Shut down.")
@@ -269,6 +309,13 @@ func main() {
 
 	printer := rubberneck.NewPrinter(log.Infof, rubberneck.NoAddLineFeed)
 	printer.PrintWithLabel("tcp_receiver settings", relay)
+
+	reporter := event.NewMetricReporter()
+	err = reporter.ProcessMetrics()
+	if err != nil {
+		log.Fatalf("Unable to connect to NATS for stats reporting! (%s)", err)
+	}
+	relay.MetricReporter = reporter
 
 	configureLoggingLevel(relay.LoggingLevel)
 

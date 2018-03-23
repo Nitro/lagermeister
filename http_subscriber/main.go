@@ -135,13 +135,13 @@ func (f *LogFollower) manageConnection() {
 // it to the remote service. It will time out waiting on a new batch after
 // BatchTimeout.
 func (f *LogFollower) SendBatch() {
-	data := f.outPool.Get()
-	defer f.outPool.Put(data)
-
 	// If there's nothing batched, bail now
 	if len(f.batchedRecords) < 1 {
 		return
 	}
+
+	data := f.outPool.Get()
+	defer f.outPool.Put(data)
 
 	// We try to get a completed batch to send. If one isn't there, we
 	// give up after BatchTimeout.
@@ -319,7 +319,8 @@ func (f *LogFollower) Unfollow() {
 
 // Shutdown disconnects from the NATS streaming server
 func (f *LogFollower) Shutdown() {
-	f.quitChan <- struct{}{}
+	close(f.quitChan)
+	f.quitChan = nil
 	if f.stanConn != nil {
 		f.stanConn.Close()
 	}
