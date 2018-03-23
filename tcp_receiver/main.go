@@ -246,7 +246,7 @@ func (t *TcpRelay) handleConnection(conn io.ReadCloser) {
 	conn.Close()
 }
 
-// reportLag runs in the background and reports a lag metric to the stats
+// reportThroughput runs in the background and reports a throughput metric to the stats
 // system.
 func (t *TcpRelay) reportThroughput() {
 	for {
@@ -261,6 +261,9 @@ func (t *TcpRelay) reportThroughput() {
 
 func (t *TcpRelay) sendThroughputMetric() {
 	count := atomic.SwapInt64(&sentCount, 0)
+	statsTput := new(expvar.Int)
+	statsTput.Set(count)
+	stats.Set("throughput", statsTput)
 
 	if t.MetricReporter != nil {
 		t.MetricReporter.TrySendMetrics(&event.MetricEvent{
@@ -320,6 +323,7 @@ func main() {
 	configureLoggingLevel(relay.LoggingLevel)
 
 	// Stats relay
+	go relay.reportThroughput()
 	go http.ListenAndServe(relay.StatsAddress, nil)
 
 	err = relay.Listen()
