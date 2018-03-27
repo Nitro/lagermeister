@@ -65,6 +65,7 @@ type LogFollower struct {
 	StubHttp      bool          `envconfig:"STUB_HTTP" default:"false"`
 	RemoteUrl     string        `envconfig:"REMOTE_URL" required:"true"`
 	LoggingLevel  string        `envconfig:"LOGGING_LEVEL" default:"info"`
+	StatsAddress  string        `envconfig:"STATS_ADDRESS" default:":35002"`
 	BatchTimeout  time.Duration `envconfig:"BATCH_TIMEOUT" default:"10s"`
 	Fields        []string      `envconfig:"FIELDS"`
 	DynamicFields []string      `envconfig:"DYNAMIC_FIELDS"` // Whitelist which dynamic fields we pass
@@ -326,8 +327,8 @@ func (f *LogFollower) Shutdown() {
 	}
 }
 
-func serveHttp() {
-	http.ListenAndServe(":34999", nil)
+func (f *LogFollower) serveHttp() {
+	http.ListenAndServe(f.StatsAddress, nil)
 }
 
 func configureLoggingLevel(level string) {
@@ -400,7 +401,7 @@ func main() {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
 
-	go serveHttp()
+	go follower.serveHttp()
 
 	<-signalChan
 	// Make sure we flush anything we were holding on to in memory
