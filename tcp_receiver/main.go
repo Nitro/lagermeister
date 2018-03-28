@@ -243,7 +243,8 @@ func (t *TcpRelay) handleConnection(conn io.ReadCloser) {
 		}
 	}
 
-	log.Info("Disconnecting socket")
+	// This is Debug level because it's noisy if the service is health checked...
+	log.Debug("Disconnecting socket")
 	conn.Close()
 }
 
