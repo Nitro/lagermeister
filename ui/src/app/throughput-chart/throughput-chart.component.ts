@@ -53,13 +53,23 @@ export class ThroughtputChartComponent {
             }
         });
 
+        // On a 1 second basis, we process everything that was aggregated and pass it to the
+        // chart for drawing. But we hold back the last value and anything in the 2 seconds
+        // before, so that we can still aggregate any slow arrivals into those two second buckets.
         setInterval(() => {
-            _.forEach(this.pendingThroughput, (data:any) => {
-                if (this.throughputChartObject.chartReady) {
-                    this.chartsService.updateLineChart(data, this.throughputChartObject);
+            let lastTimestamp = this.pendingThroughput[this.pendingThroughput.length-1].Timestamp;
+            let leaveBehindCount = 0; // Number of values to leave in the array after processing
+            _.forEach(this.pendingThroughput, (data:any,) => {
+                if (data.Timestamp < lastTimestamp-2) {
+                    if (this.throughputChartObject.chartReady) {
+                        this.chartsService.updateLineChart(data, this.throughputChartObject);
+                    }
+                } else {
+                    leaveBehindCount += 1;
                 }
             });
-            this.pendingThroughput.splice(0);
+
+            this.pendingThroughput = this.pendingThroughput.slice(this.pendingThroughput.length - leaveBehindCount, this.pendingThroughput.length);
         }, 1000)
     }
 
@@ -70,6 +80,7 @@ export class ThroughtputChartComponent {
     aggregateData(data: any) {
 
         this.pendingThroughput.push(data);
+
         let grouped = _.groupBy(this.pendingThroughput, (evt:any) => {
             return evt.Timestamp
         });

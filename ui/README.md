@@ -4,7 +4,7 @@ Hackweek project by Karl and Paul
 
 ## Local Development
 
-Run `ng serve` to serve the application for development 
+Run `npm run start` to serve the application for development 
 
 ## Building
 
