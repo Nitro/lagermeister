@@ -20,12 +20,18 @@ export class ThroughtputChartComponent {
         this.chartsService.fetchConfig()
             .then( (resp: any) => {
                 this.chartConfig = resp;
+
+                let columns = [['Timestamp', 'datetime']];
+                _.each(_.keys(this.chartConfig.Throughput).sort().reverse(), (key: string) => {
+                            columns.push([key, 'number']);
+                        });
+
                 this.throughputChartObject = {
                     chartType: 'LineChart',
                     data: {},
                     chart: null,
                     domElement: 'throughput-chart',
-                    columns: [['Timestamp', 'datetime']].concat(_.map(this.chartConfig.Throughput, (k: string, v: string) => { return [v, 'number']; })),
+                    columns: columns,
                     options: Object.assign({
                         vAxis: {
                             title: 'Throughput (rps)',
@@ -82,17 +88,23 @@ export class ThroughtputChartComponent {
         this.pendingThroughput.push(data);
 
         let grouped = _.groupBy(this.pendingThroughput, (evt:any) => {
-            return evt.Timestamp
+            return evt.Timestamp;
         });
 
         let combined:Array<any> = [];
         _.forEach(grouped, (items:any, time:any) => {
             let combinedItem = {
-                Values: {}
+                Values: {},
+                MetricType: '',
+                Timestamp: 0,
+                Sender: ''
             };
 
             _.forEach(items, (item:any) => {
                 Object.assign(combinedItem, item);
+                combinedItem.Sender = item.Sender;
+                combinedItem.MetricType = item.MetricType;
+                combinedItem.Timestamp = item.Timestamp;
                 combinedItem.Values[item.Sender] = item.Value;
             });
 

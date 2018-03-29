@@ -109,9 +109,10 @@ export class ChartsService {
 
         if (!_.isNil(data.Values)) { // Draw multiple lines
             let fields = [date];
-            for (let i in data.Values) {
-                fields.push(data.Values[i])
-            }
+            let keys = _.keys(data.Values).sort().reverse();
+            _.each(keys, (x) => {
+                fields.push(data.Values[x]);
+            });
             chartObject.data.addRow(fields);
         } else { // Draw single line
             chartObject.data.addRow([date, data.Value]);
