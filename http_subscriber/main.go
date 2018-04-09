@@ -71,6 +71,7 @@ type LogFollower struct {
 	Fields        []string      `envconfig:"FIELDS"`
 	DynamicFields []string      `envconfig:"DYNAMIC_FIELDS"` // Whitelist which dynamic fields we pass
 
+	hostname       string
 	stanConn       stan.Conn
 	subscription   stan.Subscription
 	batchedRecords chan *message.Message
@@ -85,6 +86,8 @@ type LogFollower struct {
 }
 
 func NewLogFollower() *LogFollower {
+	hostname, _ := os.Hostname()
+
 	return &LogFollower{
 		batchedRecords: make(chan *message.Message, BatchSize),
 		outPool:        bpool.NewBufferPool(2),
@@ -92,6 +95,7 @@ func NewLogFollower() *LogFollower {
 		lastSeenTime:   time.Unix(0, 0),
 		lastWallTime:   time.Unix(0, 0),
 		Fields:         defaultFields,
+		hostname:       hostname,
 	}
 }
 
@@ -217,6 +221,17 @@ func (f *LogFollower) sendLagMetric() {
 
 func (f *LogFollower) send(buf []byte) {
 	f.poster.Post(buf)
+
+	if f.MetricReporter != nil {
+		f.MetricReporter.TrySendMetrics(&event.MetricEvent{
+			Timestamp:  time.Now().UTC().Unix(),
+			SourceIP:   f.hostname,
+			Sender:     "sumologic-publisher",
+			MetricType: "BatchCount",
+			Aggregate:  "Total",
+			Value:      1,
+		})
+	}
 }
 
 // BatchRecord adds a record to the batch channel after Unmarshaling it from
