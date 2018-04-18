@@ -383,7 +383,7 @@ func main() {
 	if follower.StubHttp {
 		follower.poster = NewStubHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout)
 	} else {
-		follower.poster = NewHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout, DefaultBatchSize)
+		follower.poster = NewHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout, follower.BatchSize)
 	}
 
 	// Don't let people confuse this for a boolean option
