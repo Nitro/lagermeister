@@ -53,7 +53,7 @@ func setupMockEndpoint(url string) http.RoundTripper {
 func NewStubHttpMessagePoster(url string, timeout time.Duration) *HttpMessagePoster {
 	transport := setupMockEndpoint(url)
 
-	poster := NewHttpMessagePoster(url, timeout)
+	poster := NewHttpMessagePoster(url, timeout, DefaultBatchSize)
 	poster.client.Transport = transport
 
 	httpmock.Activate()

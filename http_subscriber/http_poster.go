@@ -12,16 +12,18 @@ import (
 type HttpMessagePoster struct {
 	Url     string
 	Timeout time.Duration
+	BatchSize int
 
 	client         *http.Client
 	semaphores     chan struct{}
 	MetricReporter *event.MetricReporter
 }
 
-func NewHttpMessagePoster(url string, timeout time.Duration) *HttpMessagePoster {
+func NewHttpMessagePoster(url string, timeout time.Duration, batchSize int) *HttpMessagePoster {
 	poster := &HttpMessagePoster{
 		Url:     url,
 		Timeout: timeout,
+		BatchSize: batchSize,
 		client: &http.Client{
 			Timeout: timeout,
 		},
@@ -85,7 +87,7 @@ func (h *HttpMessagePoster) Post(data []byte) {
 		if h.MetricReporter != nil {
 			h.MetricReporter.TrySendMetrics(&event.MetricEvent{
 				Timestamp:  time.Now().UTC().Unix(),
-				Value:      float64(BatchSize),
+				Value:      float64(h.BatchSize),
 				Aggregate:  "Average",
 				Sender:     "http-output", // TODO make this configurable
 				MetricType: "BatchSize",
@@ -93,7 +95,7 @@ func (h *HttpMessagePoster) Post(data []byte) {
 
 			h.MetricReporter.TrySendMetrics(&event.MetricEvent{
 				Timestamp:  time.Now().UTC().Unix(),
-				Value:      float64(BatchSize),
+				Value:      float64(h.BatchSize),
 				Aggregate:  "Total",
 				Sender:     "http-output", // TODO make this configurable
 				MetricType: "Throughput",

@@ -21,9 +21,8 @@ import (
 )
 
 const (
-	BatchSize          = 100
+	DefaultBatchSize   = 100
 	MaxEncodedSize     = 21 * 1024 // Maximum encoded JSON size
-	OutRecordSize      = BatchSize*MaxEncodedSize + BatchSize + 10
 	CheckTime          = 5 * time.Second  // Check the NATS connection
 	PosterPoolSize     = 25               // HTTP posters
 	DefaultHttpTimeout = 10 * time.Second // When posting to e.g. Sumologic
@@ -68,6 +67,7 @@ type LogFollower struct {
 	LoggingLevel  string        `envconfig:"LOGGING_LEVEL" default:"info"`
 	StatsAddress  string        `envconfig:"STATS_ADDRESS" default:":35002"`
 	BatchTimeout  time.Duration `envconfig:"BATCH_TIMEOUT" default:"10s"`
+	BatchSize     int           `envconfig:"BATCH_SIZE"`
 	Fields        []string      `envconfig:"FIELDS"`
 	DynamicFields []string      `envconfig:"DYNAMIC_FIELDS"` // Whitelist which dynamic fields we pass
 
@@ -89,7 +89,8 @@ func NewLogFollower() *LogFollower {
 	hostname, _ := os.Hostname()
 
 	return &LogFollower{
-		batchedRecords: make(chan *message.Message, BatchSize),
+		BatchSize:      DefaultBatchSize,
+		batchedRecords: make(chan *message.Message, DefaultBatchSize),
 		outPool:        bpool.NewBufferPool(2),
 		quitChan:       make(chan struct{}),
 		lastSeenTime:   time.Unix(0, 0),
@@ -152,7 +153,7 @@ func (f *LogFollower) SendBatch() {
 	// We try to get a completed batch to send. If one isn't there, we
 	// give up after BatchTimeout.
 	var rec *message.Message
-	for i := 0; i < BatchSize; i++ {
+	for i := 0; i < f.BatchSize; i++ {
 		select {
 		case rec = <-f.batchedRecords:
 			// moving along
@@ -382,7 +383,7 @@ func main() {
 	if follower.StubHttp {
 		follower.poster = NewStubHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout)
 	} else {
-		follower.poster = NewHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout)
+		follower.poster = NewHttpMessagePoster(follower.RemoteUrl, DefaultHttpTimeout, DefaultBatchSize)
 	}
 
 	// Don't let people confuse this for a boolean option
