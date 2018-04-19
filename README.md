@@ -14,6 +14,8 @@ of the system. In this way temporary burst load can be absorbed by the broker
 and components can be scaled up and down individually based on the needs of the
 pipeline they serve.
 
+![Lägermeister dashboard](assets/screenshot.png)
+
 Lägermeister uses NATS-streaming as the message broker. The system is comprised
 of three main parts:
 
