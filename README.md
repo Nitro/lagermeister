@@ -85,6 +85,7 @@ SUB_STUB_HTTP        True or False       false
 SUB_REMOTE_URL       String                                       true
 SUB_LOGGING_LEVEL    String              info
 SUB_BATCH_TIMEOUT    Duration            10s
+SUB_BATCH_SIZE       Integer             100
 ```
 
 An example of configuring this component would look something like this:
