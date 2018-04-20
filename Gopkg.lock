@@ -52,13 +52,14 @@
   version = "v1.5.0"
 
 [[projects]]
-  branch = "master"
+  branch = "relistan/refactor-ack-timeout"
   name = "github.com/nats-io/go-nats-streaming"
   packages = [
     ".",
     "pb"
   ]
-  revision = "1662e177fdb0b7964a25e8e7e3570dd49b763c9a"
+  revision = "2230fc229aed569a16d6609220cccccffefe73d0"
+  source = "github.com/Nitro/go-nats-streaming"
 
 [[projects]]
   name = "github.com/nats-io/nuid"
@@ -150,6 +151,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "c8e709d9e9a8b000b39f4dedaf1fc15dc6789d6ebd85bda5da57db4accb7dad5"
+  inputs-digest = "93581201367ee093e29b61a142c906a791e3204b8aacae1f810a30d362f74e1b"
   solver-name = "gps-cdcl"
   solver-version = 1

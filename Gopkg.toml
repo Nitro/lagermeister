@@ -1,3 +1,4 @@
 [[constraint]]
-  branch = "master"
+  branch = "relistan/refactor-ack-timeout"
   name = "github.com/nats-io/go-nats-streaming"
+  source = "github.com/Nitro/go-nats-streaming"
