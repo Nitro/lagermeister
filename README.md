@@ -1,7 +1,7 @@
-Lägermeister
+Lagermeister
 ============
 
-Lägermeister is a Heka message compatible logging forwarder backed by NATS.
+Lagermeister is a Heka message compatible logging forwarder backed by NATS.
 This serves as a centralized log forwarder so that clients can have a local
 relay that will accept large volumes of logs and which is capable of batching
 them into groups and forwarding to a logging system like Sumologic.
@@ -14,9 +14,9 @@ of the system. In this way temporary burst load can be absorbed by the broker
 and components can be scaled up and down individually based on the needs of the
 pipeline they serve.
 
-![Lägermeister dashboard](assets/screenshot.png)
+![Lagermeister dashboard](assets/screenshot.png)
 
-Lägermeister uses NATS-streaming as the message broker. The system is comprised
+Lagermeister uses NATS-streaming as the message broker. The system is comprised
 of three main parts:
 
 1. **Message receiver**: There are two implementations of the message receiver:
@@ -99,7 +99,6 @@ $ SUB_CLIENT_ID=asdf \
   SUB_REMOTE_URL="https://endpoint1.collection.us2.sumologic.com/receiver/v1/http/ZaVnC4dhaV2Djfx_aJ93Ht013FC51G9_FuWipqPPW5RSxez24iXceWKhPfxlPh-GVEyTX_ZBxrCMwUh-CMuNn8yPdhXxAxVZkEJWFuO7lmcja6wE3V6WOg==" \
   go run subscriber.go
 ```
-
 
 ### `log_generator`
 
