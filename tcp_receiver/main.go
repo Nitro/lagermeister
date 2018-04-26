@@ -315,7 +315,7 @@ func main() {
 	printer := rubberneck.NewPrinter(log.Infof, rubberneck.NoAddLineFeed)
 	printer.PrintWithLabel("tcp_receiver settings", relay)
 
-	reporter := event.NewMetricReporter()
+	reporter := event.NewMetricReporter(relay.NatsUrl)
 	err = reporter.ProcessMetrics()
 	if err != nil {
 		log.Fatalf("Unable to connect to NATS for stats reporting! (%s)", err)

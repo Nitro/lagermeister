@@ -4,25 +4,27 @@ import (
 	"fmt"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/nats-io/go-nats"
 	"github.com/pquerna/ffjson/ffjson"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
-	StatsChanBufSize   = 4096             // We buffer this many stats/sec
+	StatsChanBufSize = 4096 // We buffer this many stats/sec
 )
 
 type MetricReporter struct {
+	NatsUrl   string
 	statsChan chan *MetricEvent
 	statsConn *nats.Conn
 	quitChan  chan struct{}
 }
 
-func NewMetricReporter() *MetricReporter {
+func NewMetricReporter(natsUrl string) *MetricReporter {
 	return &MetricReporter{
 		statsChan: make(chan *MetricEvent, StatsChanBufSize),
-		quitChan: make(chan struct{}),
+		quitChan:  make(chan struct{}),
+		NatsUrl:   natsUrl,
 	}
 }
 
@@ -39,7 +41,7 @@ func (r *MetricReporter) ProcessMetrics() error {
 	var err error
 
 	// TODO get these from the config!
-	r.statsConn, err = nats.Connect("nats://localhost:4222")
+	r.statsConn, err = nats.Connect(r.NatsUrl)
 	if err != nil {
 		return fmt.Errorf("Unable to connect to NATS: %s", err)
 	}

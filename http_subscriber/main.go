@@ -22,7 +22,7 @@ import (
 
 const (
 	DefaultBatchSize   = 100
-	MaxEncodedSize     = 21 * 1024 // Maximum encoded JSON size
+	MaxEncodedSize     = 21 * 1024        // Maximum encoded JSON size
 	CheckTime          = 5 * time.Second  // Check the NATS connection
 	PosterPoolSize     = 25               // HTTP posters
 	DefaultHttpTimeout = 10 * time.Second // When posting to e.g. Sumologic
@@ -405,7 +405,7 @@ func main() {
 		follower.Subject, follower.ClientId, follower.Qgroup, follower.Durable,
 	)
 
-	reporter := event.NewMetricReporter()
+	reporter := event.NewMetricReporter(follower.NatsUrl)
 	err = reporter.ProcessMetrics()
 	if err != nil {
 		log.Fatalf("Unable to connect to NATS for stats reporting! (%s)", err)
