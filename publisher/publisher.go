@@ -40,11 +40,12 @@ type StanPublisher struct {
 	Stats           *expvar.Map
 	ConnectHoldDown time.Duration
 
-	stanConn    stan.Conn
-	available   bool
-	availLock   sync.RWMutex
-	connectSem  chan struct{}
-	lastConnect time.Time
+	stanConn        stan.Conn
+	connectSem      chan struct{}
+	connectWaitChan chan struct{}
+	lastConnect     time.Time
+	available       bool
+	availLock       sync.RWMutex
 }
 
 // Connect is the main method, used to connect the StanPublisher to the
@@ -55,6 +56,10 @@ func (s *StanPublisher) Connect() error {
 	if s.connectSem == nil {
 		s.connectSem = make(chan struct{}, 1)
 		s.connectSem <- struct{}{} // Make sure there is one semaphore
+	}
+
+	if s.connectWaitChan == nil {
+		s.connectWaitChan = make(chan struct{})
 	}
 
 	err := s.connectStan()
@@ -77,17 +82,19 @@ func (s *StanPublisher) connectStan() error {
 		if time.Now().UTC().Sub(s.lastConnect) < s.ConnectHoldDown {
 			return errors.New("Too soon to reconnect to NATS, punting")
 		}
+
+		// Free any pre-existing connection
+		if !s.lastConnect.IsZero() && (s.stanConn != nil) {
+			s.stanConn.NatsConn().Close()
+			s.stanConn.Close()
+			s.Stats.Add("publisherReconnectCount", 1)
+		}
+
 		s.lastConnect = time.Now().UTC()
 
 		log.Infof("Attempting to connect to NATS streaming: %s clusterID=[%s] clientID=[%s]",
 			s.NatsUrl, s.ClusterId, s.ClientId,
 		)
-
-		// Free any pre-existing connection
-		if s.lastConnect.IsZero() {
-			s.stanConn.NatsConn().Close()
-			s.stanConn.Close()
-		}
 
 		s.stanConn, err = stan.Connect(
 			s.ClusterId, s.ClientId, stan.NatsURL(s.NatsUrl),
@@ -101,16 +108,64 @@ func (s *StanPublisher) connectStan() error {
 			return fmt.Errorf("Error connecting to NATS streaming: %s", err)
 		}
 
-		log.Info("Connected to NATS streaming successfully")
 		s.BreakerOff()
+		// Notify all waiting goroutines that we are now connected
+		close(s.connectWaitChan)
+		s.connectWaitChan = make(chan struct{})
+
+		log.Info("Connected to NATS streaming successfully")
 	default:
+		<-s.connectWaitChan
 	}
 
 	return nil
 }
 
-// BreakerOn flips the circuit breaker to on, so that we don't accept any
-// messages that we won't be able to store. We could end up dropping the
+// RelayMessage publishes a message to NATS streaming. It is blocking and can
+// hold onto the goroutine for several seconds so it should be run only where
+// that won't cause any performance issues.
+func (s *StanPublisher) RelayMessage(msg *message.Message) {
+	data, err := msg.Marshal()
+	if err != nil {
+		log.Errorf("Encoding: %s", err)
+	}
+
+	for i, sleepTime := range publishRetries {
+		// Keep this which we'll hold on to only if it was not nil
+		conn := s.stanConn
+
+		// Check if we need to reconnect. If so, then we sleep and loop back
+		if conn == nil {
+			log.Warn("NATS connection was nil. Retrying.")
+			time.Sleep(time.Duration(sleepTime) * time.Millisecond)
+			s.BreakerOn()
+			s.connectStan()
+			continue
+		}
+
+		err = conn.Publish(s.Subject, data)
+		// If nothing went wrong, we're good to go
+		if err == nil {
+			s.Stats.Add("publishedCount", 1)
+			break
+		}
+
+		if err == stan.ErrConnectionClosed || err == stan.ErrBadConnection ||
+			err == stan.ErrTimeout {
+
+			s.Stats.Add("retryCount", 1)
+			log.Warnf("Retrying #%d publishing to NATS, got %s", i, err)
+			time.Sleep(time.Duration(sleepTime) * time.Millisecond)
+			s.BreakerOn()
+			s.connectStan()
+			continue
+		}
+
+		log.Errorf("Publishing: %s", err)
+		s.Stats.Add("errorCount", 1)
+	}
+}
+
 // first message that has an issue because we don't actively manage the NATS
 // connection.
 func (s *StanPublisher) BreakerOn() {
@@ -143,47 +198,6 @@ func (s *StanPublisher) IsAvailable() bool {
 	defer s.availLock.RUnlock()
 
 	return s.available
-}
-
-// RelayMessage publishes a message to NATS streaming. It is blocking and can
-// hold onto the goroutine for several seconds so it should be run only where
-// that won't cause any performance issues.
-func (s *StanPublisher) RelayMessage(msg *message.Message) {
-	data, err := msg.Marshal()
-	if err != nil {
-		log.Errorf("Encoding: %s", err)
-	}
-
-	for i, sleepTime := range publishRetries {
-		err = s.stanConn.Publish(s.Subject, data)
-		if err == nil {
-			s.Stats.Add("publishedCount", 1)
-			break
-		}
-
-		// We only get here if something went wrong publishing
-		s.BreakerOn()
-
-		if err == stan.ErrConnectionClosed || err == stan.ErrBadConnection ||
-			err == stan.ErrTimeout {
-
-			s.Stats.Add("retryCount", 1)
-			log.Warnf("Retrying #%d publishing to NATS, got %s", i, err)
-			s.stanConn.Close()
-
-			err = s.connectStan()
-			if err != nil || !s.IsAvailable() {
-				log.Warnf("Retrying #%d publishing to NATS", i)
-				time.Sleep(time.Duration(sleepTime) * time.Millisecond)
-				continue
-			}
-
-			continue
-		}
-
-		log.Errorf("Publishing: %s", err)
-		s.Stats.Add("errorCount", 1)
-	}
 }
 
 // Shutdown will clean up after the publisher and close open connections
