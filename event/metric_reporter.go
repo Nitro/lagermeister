@@ -40,10 +40,9 @@ func (r *MetricReporter) TrySendMetrics(evt *MetricEvent) {
 func (r *MetricReporter) ProcessMetrics() error {
 	var err error
 
-	// TODO get these from the config!
 	r.statsConn, err = nats.Connect(r.NatsUrl)
 	if err != nil {
-		return fmt.Errorf("Unable to connect to NATS: %s", err)
+		return fmt.Errorf("Unable to connect to NATS URL '%s': %s", r.NatsUrl, err)
 	}
 
 	go func() {
