@@ -225,7 +225,6 @@ func parseMatcherSpecification(ms *MatcherSpecification) error {
 }
 
 func (m *MatcherSpecificationParser) Error(s string) {
-	fmt.Errorf("syntax error: %s last token: %s pos: %d", m.sym, m.lexPos)
 }
 
 func (m *MatcherSpecificationParser) Lex(yylval *yySymType) int {

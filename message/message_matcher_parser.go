@@ -149,6 +149,7 @@ const yyErrCode = 2
 const yyInitialStackSize = 16
 
 //line message_matcher_parser.y:191
+
 type MatcherSpecificationParser struct {
 	spec     string
 	sym      string
@@ -184,7 +185,6 @@ func parseMatcherSpecification(ms *MatcherSpecification) error {
 }
 
 func (m *MatcherSpecificationParser) Error(s string) {
-	fmt.Errorf("syntax error: %s last token: %s pos: %d", m.sym, m.lexPos)
 }
 
 func (m *MatcherSpecificationParser) Lex(yylval *yySymType) int {
@@ -502,11 +502,7 @@ var yyExca = [...]int{
 	-2, 4,
 }
 
-const yyNprod = 39
 const yyPrivate = 57344
-
-var yyTokenNames []string
-var yyStates []string
 
 const yyLast = 77
 
