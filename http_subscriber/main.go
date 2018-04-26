@@ -83,6 +83,8 @@ type LogFollower struct {
 	lastSeenTime   time.Time // The timestamp from the last event we saw
 	lastWallTime   time.Time // The last actual time we saw an event
 	MetricReporter *event.MetricReporter
+
+	lastTimestampSyncWarning time.Time
 }
 
 func NewLogFollower() *LogFollower {
@@ -201,7 +203,11 @@ func (f *LogFollower) reportLag() {
 func (f *LogFollower) sendLagMetric() {
 	lag := f.lastWallTime.Sub(f.lastSeenTime)
 	if lag < 0 {
-		log.Warn("Stale lag metric... timestamps are not in sync!")
+		// Don't spam the logs
+		if f.lastTimestampSyncWarning.IsZero() || time.Now().UTC().Sub(f.lastTimestampSyncWarning) > 60*time.Second {
+			log.Warnf("Stale lag metric %s: timestamps are not in sync!", lag)
+			f.lastTimestampSyncWarning = time.Now().UTC()
+		}
 		lag = 0
 	}
 
